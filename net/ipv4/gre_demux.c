@@ -1,13 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	GRE over IPv4 demultiplexer driver
  *
  *	Authors: Dmitry Kozlov (xeb@mail.ru)
- *
- *	This program is free software; you can redistribute it and/or
- *	modify it under the terms of the GNU General Public License
- *	as published by the Free Software Foundation; either version
- *	2 of the License, or (at your option) any later version.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -25,6 +20,7 @@
 #include <linux/spinlock.h>
 #include <net/protocol.h>
 #include <net/gre.h>
+#include <net/erspan.h>
 
 #include <net/icmp.h>
 #include <net/route.h>
@@ -119,6 +115,22 @@ int gre_parse_header(struct sk_buff *skb, struct tnl_ptk_info *tpi,
 			hdr_len += 4;
 	}
 	tpi->hdr_len = hdr_len;
+
+	/* ERSPAN ver 1 and 2 protocol sets GRE key field
+	 * to 0 and sets the configured key in the
+	 * inner erspan header field
+	 */
+	if (greh->protocol == htons(ETH_P_ERSPAN) ||
+	    greh->protocol == htons(ETH_P_ERSPAN2)) {
+		struct erspan_base_hdr *ershdr;
+
+		if (!pskb_may_pull(skb, nhs + hdr_len + sizeof(*ershdr)))
+			return -EINVAL;
+
+		ershdr = (struct erspan_base_hdr *)options;
+		tpi->key = cpu_to_be32(get_session_id(ershdr));
+	}
+
 	return hdr_len;
 }
 EXPORT_SYMBOL(gre_parse_header);

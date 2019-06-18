@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * PowerPC 4xx OCM memory allocation support
  *
@@ -6,21 +7,6 @@
  *
  * See file CREDITS for list of people who contributed to this
  * project.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
  */
 
 #include <linux/kernel.h>
@@ -237,12 +223,12 @@ static int ocm_debugfs_show(struct seq_file *m, void *v)
 			continue;
 
 		seq_printf(m, "PPC4XX OCM   : %d\n", ocm->index);
-		seq_printf(m, "PhysAddr     : %pa[p]\n", &(ocm->phys));
+		seq_printf(m, "PhysAddr     : %pa\n", &(ocm->phys));
 		seq_printf(m, "MemTotal     : %d Bytes\n", ocm->memtotal);
 		seq_printf(m, "MemTotal(NC) : %d Bytes\n", ocm->nc.memtotal);
 		seq_printf(m, "MemTotal(C)  : %d Bytes\n\n", ocm->c.memtotal);
 
-		seq_printf(m, "NC.PhysAddr  : %pa[p]\n", &(ocm->nc.phys));
+		seq_printf(m, "NC.PhysAddr  : %pa\n", &(ocm->nc.phys));
 		seq_printf(m, "NC.VirtAddr  : 0x%p\n", ocm->nc.virt);
 		seq_printf(m, "NC.MemTotal  : %d Bytes\n", ocm->nc.memtotal);
 		seq_printf(m, "NC.MemFree   : %d Bytes\n", ocm->nc.memfree);
@@ -252,7 +238,7 @@ static int ocm_debugfs_show(struct seq_file *m, void *v)
 							blk->size, blk->owner);
 		}
 
-		seq_printf(m, "\nC.PhysAddr   : %pa[p]\n", &(ocm->c.phys));
+		seq_printf(m, "\nC.PhysAddr   : %pa\n", &(ocm->c.phys));
 		seq_printf(m, "C.VirtAddr   : 0x%p\n", ocm->c.virt);
 		seq_printf(m, "C.MemTotal   : %d Bytes\n", ocm->c.memtotal);
 		seq_printf(m, "C.MemFree    : %d Bytes\n", ocm->c.memfree);

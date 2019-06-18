@@ -507,6 +507,7 @@ static int __init s10_init(void)
 	if (!fw_np)
 		return -ENODEV;
 
+	of_node_get(fw_np);
 	np = of_find_matching_node(fw_np, s10_of_match);
 	if (!np) {
 		of_node_put(fw_np);

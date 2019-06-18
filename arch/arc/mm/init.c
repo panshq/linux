@@ -119,7 +119,8 @@ void __init setup_arch_memory(void)
 	 */
 
 	memblock_add_node(low_mem_start, low_mem_sz, 0);
-	memblock_reserve(low_mem_start, __pa(_end) - low_mem_start);
+	memblock_reserve(CONFIG_LINUX_LINK_BASE,
+			 __pa(_end) - CONFIG_LINUX_LINK_BASE);
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	if (phys_initrd_size) {
@@ -205,18 +206,3 @@ void __init mem_init(void)
 	memblock_free_all();
 	mem_init_print_info(NULL);
 }
-
-/*
- * free_initmem: Free all the __init memory.
- */
-void __ref free_initmem(void)
-{
-	free_initmem_default(-1);
-}
-
-#ifdef CONFIG_BLK_DEV_INITRD
-void __init free_initrd_mem(unsigned long start, unsigned long end)
-{
-	free_reserved_area((void *)start, (void *)end, -1, "initrd");
-}
-#endif

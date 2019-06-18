@@ -657,7 +657,7 @@ static int pm8001_dev_found_notify(struct domain_device *dev)
 		if (dev->dev_type == SAS_SATA_DEV) {
 			pm8001_device->attached_phy =
 				dev->rphy->identify.phy_identifier;
-				flag = 1; /* directly sata*/
+			flag = 1; /* directly sata */
 		}
 	} /*register this device to HBA*/
 	PM8001_DISC_DBG(pm8001_ha, pm8001_printk("Found device\n"));
@@ -740,8 +740,8 @@ static int pm8001_exec_internal_tmf_task(struct domain_device *dev,
 		wait_for_completion(&task->slow_task->completion);
 		if (pm8001_ha->chip_id != chip_8001) {
 			pm8001_dev->setds_completion = &completion_setstate;
-				PM8001_CHIP_DISP->set_dev_state_req(pm8001_ha,
-					pm8001_dev, 0x01);
+			PM8001_CHIP_DISP->set_dev_state_req(pm8001_ha,
+				pm8001_dev, 0x01);
 			wait_for_completion(&completion_setstate);
 		}
 		res = -TMF_RESP_FUNC_FAILED;
