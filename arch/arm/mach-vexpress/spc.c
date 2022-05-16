@@ -69,7 +69,7 @@
 #define A7_PERFVAL_BASE		0xC30
 
 /* Config interface control bits */
-#define SYSCFG_START		(1 << 31)
+#define SYSCFG_START		BIT(31)
 #define SYSCFG_SCC		(6 << 20)
 #define SYSCFG_STAT		(14 << 20)
 
@@ -122,13 +122,13 @@ static inline bool cluster_is_a15(u32 cluster)
 }
 
 /**
- * ve_spc_global_wakeup_irq()
+ * ve_spc_global_wakeup_irq() - sets/clears global wakeup IRQs
+ *
+ * @set: if true, global wake-up IRQs are set, if false they are cleared
  *
  * Function to set/clear global wakeup IRQs. Not protected by locking since
  * it might be used in code paths where normal cacheable locks are not
  * working. Locking must be provided by the caller to ensure atomicity.
- *
- * @set: if true, global wake-up IRQs are set, if false they are cleared
  */
 void ve_spc_global_wakeup_irq(bool set)
 {
@@ -145,15 +145,15 @@ void ve_spc_global_wakeup_irq(bool set)
 }
 
 /**
- * ve_spc_cpu_wakeup_irq()
- *
- * Function to set/clear per-CPU wake-up IRQs. Not protected by locking since
- * it might be used in code paths where normal cacheable locks are not
- * working. Locking must be provided by the caller to ensure atomicity.
+ * ve_spc_cpu_wakeup_irq() - sets/clears per-CPU wake-up IRQs
  *
  * @cluster: mpidr[15:8] bitfield describing cluster affinity level
  * @cpu: mpidr[7:0] bitfield describing cpu affinity level
  * @set: if true, wake-up IRQs are set, if false they are cleared
+ *
+ * Function to set/clear per-CPU wake-up IRQs. Not protected by locking since
+ * it might be used in code paths where normal cacheable locks are not
+ * working. Locking must be provided by the caller to ensure atomicity.
  */
 void ve_spc_cpu_wakeup_irq(u32 cluster, u32 cpu, bool set)
 {
@@ -162,7 +162,7 @@ void ve_spc_cpu_wakeup_irq(u32 cluster, u32 cpu, bool set)
 	if (cluster >= MAX_CLUSTERS)
 		return;
 
-	mask = 1 << cpu;
+	mask = BIT(cpu);
 
 	if (!cluster_is_a15(cluster))
 		mask <<= 4;
@@ -200,14 +200,14 @@ void ve_spc_set_resume_addr(u32 cluster, u32 cpu, u32 addr)
 }
 
 /**
- * ve_spc_powerdown()
+ * ve_spc_powerdown() - enables/disables cluster powerdown
+ *
+ * @cluster: mpidr[15:8] bitfield describing cluster affinity level
+ * @enable: if true enables powerdown, if false disables it
  *
  * Function to enable/disable cluster powerdown. Not protected by locking
  * since it might be used in code paths where normal cacheable locks are not
  * working. Locking must be provided by the caller to ensure atomicity.
- *
- * @cluster: mpidr[15:8] bitfield describing cluster affinity level
- * @enable: if true enables powerdown, if false disables it
  */
 void ve_spc_powerdown(u32 cluster, bool enable)
 {
@@ -228,7 +228,7 @@ static u32 standbywfi_cpu_mask(u32 cpu, u32 cluster)
 }
 
 /**
- * ve_spc_cpu_in_wfi(u32 cpu, u32 cluster)
+ * ve_spc_cpu_in_wfi() - Checks if the specified CPU is in WFI or not
  *
  * @cpu: mpidr[7:0] bitfield describing CPU affinity level within cluster
  * @cluster: mpidr[15:8] bitfield describing cluster affinity level
@@ -551,8 +551,9 @@ static struct clk *ve_spc_clk_register(struct device *cpu_dev)
 
 static int __init ve_spc_clk_init(void)
 {
-	int cpu;
+	int cpu, cluster;
 	struct clk *clk;
+	bool init_opp_table[MAX_CLUSTERS] = { false };
 
 	if (!info)
 		return 0; /* Continue only if SPC is initialised */
@@ -578,8 +579,17 @@ static int __init ve_spc_clk_init(void)
 			continue;
 		}
 
+		cluster = topology_physical_package_id(cpu_dev->id);
+		if (cluster < 0 || init_opp_table[cluster])
+			continue;
+
 		if (ve_init_opp_table(cpu_dev))
 			pr_warn("failed to initialise cpu%d opp table\n", cpu);
+		else if (dev_pm_opp_set_sharing_cpus(cpu_dev,
+			 topology_core_cpumask(cpu_dev->id)))
+			pr_warn("failed to mark OPPs shared for cpu%d\n", cpu);
+		else
+			init_opp_table[cluster] = true;
 	}
 
 	platform_device_register_simple("vexpress-spc-cpufreq", -1, NULL, 0);

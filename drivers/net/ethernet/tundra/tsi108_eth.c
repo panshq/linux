@@ -371,9 +371,10 @@ tsi108_stat_carry_one(int carry, int carry_bit, int carry_shift,
 static void tsi108_stat_carry(struct net_device *dev)
 {
 	struct tsi108_prv_data *data = netdev_priv(dev);
+	unsigned long flags;
 	u32 carry1, carry2;
 
-	spin_lock_irq(&data->misclock);
+	spin_lock_irqsave(&data->misclock, flags);
 
 	carry1 = TSI_READ(TSI108_STAT_CARRY1);
 	carry2 = TSI_READ(TSI108_STAT_CARRY2);
@@ -441,7 +442,7 @@ static void tsi108_stat_carry(struct net_device *dev)
 			      TSI108_STAT_TXPAUSEDROP_CARRY,
 			      &data->tx_pause_drop);
 
-	spin_unlock_irq(&data->misclock);
+	spin_unlock_irqrestore(&data->misclock, flags);
 }
 
 /* Read a stat counter atomically with respect to carries.
@@ -1090,20 +1091,22 @@ static int tsi108_get_mac(struct net_device *dev)
 	struct tsi108_prv_data *data = netdev_priv(dev);
 	u32 word1 = TSI_READ(TSI108_MAC_ADDR1);
 	u32 word2 = TSI_READ(TSI108_MAC_ADDR2);
+	u8 addr[ETH_ALEN];
 
 	/* Note that the octets are reversed from what the manual says,
 	 * producing an even weirder ordering...
 	 */
 	if (word2 == 0 && word1 == 0) {
-		dev->dev_addr[0] = 0x00;
-		dev->dev_addr[1] = 0x06;
-		dev->dev_addr[2] = 0xd2;
-		dev->dev_addr[3] = 0x00;
-		dev->dev_addr[4] = 0x00;
+		addr[0] = 0x00;
+		addr[1] = 0x06;
+		addr[2] = 0xd2;
+		addr[3] = 0x00;
+		addr[4] = 0x00;
 		if (0x8 == data->phy)
-			dev->dev_addr[5] = 0x01;
+			addr[5] = 0x01;
 		else
-			dev->dev_addr[5] = 0x02;
+			addr[5] = 0x02;
+		eth_hw_addr_set(dev, addr);
 
 		word2 = (dev->dev_addr[0] << 16) | (dev->dev_addr[1] << 24);
 
@@ -1113,12 +1116,13 @@ static int tsi108_get_mac(struct net_device *dev)
 		TSI_WRITE(TSI108_MAC_ADDR1, word1);
 		TSI_WRITE(TSI108_MAC_ADDR2, word2);
 	} else {
-		dev->dev_addr[0] = (word2 >> 16) & 0xff;
-		dev->dev_addr[1] = (word2 >> 24) & 0xff;
-		dev->dev_addr[2] = (word1 >> 0) & 0xff;
-		dev->dev_addr[3] = (word1 >> 8) & 0xff;
-		dev->dev_addr[4] = (word1 >> 16) & 0xff;
-		dev->dev_addr[5] = (word1 >> 24) & 0xff;
+		addr[0] = (word2 >> 16) & 0xff;
+		addr[1] = (word2 >> 24) & 0xff;
+		addr[2] = (word1 >> 0) & 0xff;
+		addr[3] = (word1 >> 8) & 0xff;
+		addr[4] = (word1 >> 16) & 0xff;
+		addr[5] = (word1 >> 24) & 0xff;
+		eth_hw_addr_set(dev, addr);
 	}
 
 	if (!is_valid_ether_addr(dev->dev_addr)) {
@@ -1135,14 +1139,12 @@ static int tsi108_set_mac(struct net_device *dev, void *addr)
 {
 	struct tsi108_prv_data *data = netdev_priv(dev);
 	u32 word1, word2;
-	int i;
 
 	if (!is_valid_ether_addr(addr))
 		return -EADDRNOTAVAIL;
 
-	for (i = 0; i < 6; i++)
-		/* +2 is for the offset of the HW addr type */
-		dev->dev_addr[i] = ((unsigned char *)addr)[i + 2];
+	/* +2 is for the offset of the HW addr type */
+	eth_hw_addr_set(dev, ((unsigned char *)addr) + 2);
 
 	word2 = (dev->dev_addr[0] << 16) | (dev->dev_addr[1] << 24);
 
@@ -1537,7 +1539,7 @@ static const struct net_device_ops tsi108_netdev_ops = {
 	.ndo_start_xmit		= tsi108_send_packet,
 	.ndo_set_rx_mode	= tsi108_set_rx_mode,
 	.ndo_get_stats		= tsi108_get_stats,
-	.ndo_do_ioctl		= tsi108_do_ioctl,
+	.ndo_eth_ioctl		= tsi108_do_ioctl,
 	.ndo_set_mac_address	= tsi108_set_mac,
 	.ndo_validate_addr	= eth_validate_addr,
 };

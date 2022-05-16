@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* -*- mode: c; c-basic-offset: 8; -*-
- * vim: noexpandtab sw=8 ts=8 sts=0:
- *
+/*
  * dlmrecovery.c
  *
  * recovery stuff
@@ -26,16 +24,16 @@
 #include <linux/delay.h>
 
 
-#include "cluster/heartbeat.h"
-#include "cluster/nodemanager.h"
-#include "cluster/tcp.h"
+#include "../cluster/heartbeat.h"
+#include "../cluster/nodemanager.h"
+#include "../cluster/tcp.h"
 
 #include "dlmapi.h"
 #include "dlmcommon.h"
 #include "dlmdomain.h"
 
 #define MLOG_MASK_PREFIX (ML_DLM|ML_DLM_RECOVERY)
-#include "cluster/masklog.h"
+#include "../cluster/masklog.h"
 
 static void dlm_do_local_recovery_cleanup(struct dlm_ctxt *dlm, u8 dead_node);
 
@@ -124,13 +122,6 @@ static inline void __dlm_reset_recovery(struct dlm_ctxt *dlm)
 	clear_bit(dlm->reco.dead_node, dlm->recovery_map);
 	dlm_set_reco_dead_node(dlm, O2NM_INVALID_NODE_NUM);
 	dlm_set_reco_master(dlm, O2NM_INVALID_NODE_NUM);
-}
-
-static inline void dlm_reset_recovery(struct dlm_ctxt *dlm)
-{
-	spin_lock(&dlm->spinlock);
-	__dlm_reset_recovery(dlm);
-	spin_unlock(&dlm->spinlock);
 }
 
 /* Worker function used during recovery. */
@@ -460,7 +451,7 @@ static int dlm_do_recovery(struct dlm_ctxt *dlm)
 	if (dlm->reco.dead_node == O2NM_INVALID_NODE_NUM) {
 		int bit;
 
-		bit = find_next_bit (dlm->recovery_map, O2NM_MAX_NODES, 0);
+		bit = find_first_bit(dlm->recovery_map, O2NM_MAX_NODES);
 		if (bit >= O2NM_MAX_NODES || bit < 0)
 			dlm_set_reco_dead_node(dlm, O2NM_INVALID_NODE_NUM);
 		else
@@ -1109,16 +1100,13 @@ static int dlm_send_mig_lockres_msg(struct dlm_ctxt *dlm,
 {
 	u64 mig_cookie = be64_to_cpu(mres->mig_cookie);
 	int mres_total_locks = be32_to_cpu(mres->total_locks);
-	int sz, ret = 0, status = 0;
+	int ret = 0, status = 0;
 	u8 orig_flags = mres->flags,
 	   orig_master = mres->master;
 
 	BUG_ON(mres->num_locks > DLM_MAX_MIGRATABLE_LOCKS);
 	if (!mres->num_locks)
 		return 0;
-
-	sz = sizeof(struct dlm_migratable_lockres) +
-		(mres->num_locks * sizeof(struct dlm_migratable_lock));
 
 	/* add an all-done flag if we reached the last lock */
 	orig_flags = mres->flags;
@@ -1133,7 +1121,8 @@ static int dlm_send_mig_lockres_msg(struct dlm_ctxt *dlm,
 
 	/* send it */
 	ret = o2net_send_message(DLM_MIG_LOCKRES_MSG, dlm->key, mres,
-				 sz, send_to, &status);
+				 struct_size(mres, ml, mres->num_locks),
+				 send_to, &status);
 	if (ret < 0) {
 		/* XXX: negative status is not handled.
 		 * this will end up killing this node. */
@@ -1670,7 +1659,7 @@ static int dlm_lockres_master_requery(struct dlm_ctxt *dlm,
 int dlm_do_master_requery(struct dlm_ctxt *dlm, struct dlm_lock_resource *res,
 			  u8 nodenum, u8 *real_master)
 {
-	int ret = -EINVAL;
+	int ret;
 	struct dlm_master_requery req;
 	int status = DLM_LOCK_RES_OWNER_UNKNOWN;
 
@@ -2709,7 +2698,6 @@ static int dlm_send_begin_reco_message(struct dlm_ctxt *dlm, u8 dead_node)
 			continue;
 		}
 retry:
-		ret = -EINVAL;
 		mlog(0, "attempting to send begin reco msg to %d\n",
 			  nodenum);
 		ret = o2net_send_message(DLM_BEGIN_RECO_MSG, dlm->key,

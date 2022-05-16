@@ -3,7 +3,7 @@
  *  isl29003.c - Linux kernel module for
  * 	Intersil ISL29003 ambient light sensor
  *
- *  See file:Documentation/misc-devices/isl29003
+ *  See file:Documentation/misc-devices/isl29003.rst
  *
  *  Copyright (c) 2009 Daniel Mack <daniel@caiaq.de>
  *
@@ -127,13 +127,13 @@ static int isl29003_set_resolution(struct i2c_client *client, int res)
 static int isl29003_get_mode(struct i2c_client *client)
 {
 	return __isl29003_read_reg(client, ISL29003_REG_COMMAND,
-		ISL29003_RES_MASK, ISL29003_RES_SHIFT);
+		ISL29003_MODE_MASK, ISL29003_MODE_SHIFT);
 }
 
 static int isl29003_set_mode(struct i2c_client *client, int mode)
 {
 	return __isl29003_write_reg(client, ISL29003_REG_COMMAND,
-		ISL29003_RES_MASK, ISL29003_RES_SHIFT, mode);
+		ISL29003_MODE_MASK, ISL29003_MODE_SHIFT, mode);
 }
 
 /* power_state */
@@ -377,7 +377,7 @@ static int isl29003_init_client(struct i2c_client *client)
 static int isl29003_probe(struct i2c_client *client,
 				    const struct i2c_device_id *id)
 {
-	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
+	struct i2c_adapter *adapter = client->adapter;
 	struct isl29003_data *data;
 	int err = 0;
 

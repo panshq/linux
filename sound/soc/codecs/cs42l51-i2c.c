@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * cs42l56.c -- CS42L51 ALSA SoC I2C audio driver
  *
  * Copyright 2014 CirrusLogic, Inc.
  *
  * Author: Brian Austin <brian.austin@cirrus.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/i2c.h>
@@ -35,7 +31,9 @@ static int cs42l51_i2c_probe(struct i2c_client *i2c,
 
 static int cs42l51_i2c_remove(struct i2c_client *i2c)
 {
-	return cs42l51_remove(&i2c->dev);
+	cs42l51_remove(&i2c->dev);
+
+	return 0;
 }
 
 static const struct dev_pm_ops cs42l51_pm_ops = {

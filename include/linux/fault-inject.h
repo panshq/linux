@@ -11,7 +11,7 @@
 
 /*
  * For explanation of the elements of this struct, see
- * Documentation/fault-injection/fault-injection.txt
+ * Documentation/fault-injection/fault-injection.rst
  */
 struct fault_attr {
 	unsigned long probability;
@@ -63,6 +63,8 @@ static inline struct dentry *fault_create_debugfs_attr(const char *name,
 #endif /* CONFIG_FAULT_INJECTION */
 
 struct kmem_cache;
+
+bool should_fail_alloc_page(gfp_t gfp_mask, unsigned int order);
 
 int should_failslab(struct kmem_cache *s, gfp_t gfpflags);
 #ifdef CONFIG_FAILSLAB

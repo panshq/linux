@@ -9,12 +9,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <net/if.h>
 #include <sys/resource.h>
 #include <arpa/inet.h>
 #include <netinet/ether.h>
 #include <unistd.h>
 #include <time.h>
-#include "bpf/libbpf.h"
+#include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include "bpf_util.h"
 #include "xdp_tx_iptunnel_common.h"
@@ -31,12 +32,12 @@ static void int_exit(int sig)
 	__u32 curr_prog_id = 0;
 
 	if (ifindex > -1) {
-		if (bpf_get_link_xdp_id(ifindex, &curr_prog_id, xdp_flags)) {
-			printf("bpf_get_link_xdp_id failed\n");
+		if (bpf_xdp_query_id(ifindex, xdp_flags, &curr_prog_id)) {
+			printf("bpf_xdp_query_id failed\n");
 			exit(1);
 		}
 		if (prog_id == curr_prog_id)
-			bpf_set_link_xdp_fd(ifindex, -1, xdp_flags);
+			bpf_xdp_detach(ifindex, xdp_flags, NULL);
 		else if (!curr_prog_id)
 			printf("couldn't find a prog id on a given iface\n");
 		else
@@ -83,7 +84,7 @@ static void usage(const char *cmd)
 	       "in an IPv4/v6 header and XDP_TX it out.  The dst <VIP:PORT>\n"
 	       "is used to select packets to encapsulate\n\n");
 	printf("Usage: %s [...]\n", cmd);
-	printf("    -i <ifindex> Interface Index\n");
+	printf("    -i <ifname|ifindex> Interface\n");
 	printf("    -a <vip-service-address> IPv4 or IPv6\n");
 	printf("    -p <vip-service-port> A port range (e.g. 433-444) is also allowed\n");
 	printf("    -s <source-ip> Used in the IPTunnel header\n");
@@ -151,10 +152,6 @@ static int parse_ports(const char *port_str, int *min_port, int *max_port)
 
 int main(int argc, char **argv)
 {
-	struct bpf_prog_load_attr prog_load_attr = {
-		.prog_type	= BPF_PROG_TYPE_XDP,
-	};
-	struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
 	int min_port = 0, max_port = 0, vip2tnl_map_fd;
 	const char *optstr = "i:a:p:s:d:m:T:P:FSNh";
 	unsigned char opt_flags[256] = {};
@@ -162,6 +159,7 @@ int main(int argc, char **argv)
 	__u32 info_len = sizeof(info);
 	unsigned int kill_after_s = 0;
 	struct iptnl_info tnl = {};
+	struct bpf_program *prog;
 	struct bpf_object *obj;
 	struct vip vip = {};
 	char filename[256];
@@ -181,7 +179,9 @@ int main(int argc, char **argv)
 
 		switch (opt) {
 		case 'i':
-			ifindex = atoi(optarg);
+			ifindex = if_nametoindex(optarg);
+			if (!ifindex)
+				ifindex = atoi(optarg);
 			break;
 		case 'a':
 			vip.family = parse_ipstr(optarg, vip.daddr.v6);
@@ -228,7 +228,7 @@ int main(int argc, char **argv)
 			xdp_flags |= XDP_FLAGS_SKB_MODE;
 			break;
 		case 'N':
-			xdp_flags |= XDP_FLAGS_DRV_MODE;
+			/* default, set below */
 			break;
 		case 'F':
 			xdp_flags &= ~XDP_FLAGS_UPDATE_IF_NOEXIST;
@@ -240,6 +240,9 @@ int main(int argc, char **argv)
 		opt_flags[opt] = 0;
 	}
 
+	if (!(xdp_flags & XDP_FLAGS_SKB_MODE))
+		xdp_flags |= XDP_FLAGS_DRV_MODE;
+
 	for (i = 0; i < strlen(optstr); i++) {
 		if (opt_flags[(unsigned int)optstr[i]]) {
 			fprintf(stderr, "Missing argument -%c\n", optstr[i]);
@@ -248,21 +251,26 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (setrlimit(RLIMIT_MEMLOCK, &r)) {
-		perror("setrlimit(RLIMIT_MEMLOCK, RLIM_INFINITY)");
+	if (!ifindex) {
+		fprintf(stderr, "Invalid ifname\n");
 		return 1;
 	}
 
 	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
-	prog_load_attr.file = filename;
 
-	if (bpf_prog_load_xattr(&prog_load_attr, &obj, &prog_fd))
+	obj = bpf_object__open_file(filename, NULL);
+	if (libbpf_get_error(obj))
 		return 1;
 
-	if (!prog_fd) {
-		printf("load_bpf_file: %s\n", strerror(errno));
+	prog = bpf_object__next_program(obj, NULL);
+	bpf_program__set_type(prog, BPF_PROG_TYPE_XDP);
+
+	err = bpf_object__load(obj);
+	if (err) {
+		printf("bpf_object__load(): %s\n", strerror(errno));
 		return 1;
 	}
+	prog_fd = bpf_program__fd(prog);
 
 	rxcnt_map_fd = bpf_object__find_map_fd_by_name(obj, "rxcnt");
 	vip2tnl_map_fd = bpf_object__find_map_fd_by_name(obj, "vip2tnl");
@@ -283,7 +291,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (bpf_set_link_xdp_fd(ifindex, prog_fd, xdp_flags) < 0) {
+	if (bpf_xdp_attach(ifindex, prog_fd, xdp_flags, NULL) < 0) {
 		printf("link set xdp fd failed\n");
 		return 1;
 	}
@@ -297,7 +305,7 @@ int main(int argc, char **argv)
 
 	poll_stats(kill_after_s);
 
-	bpf_set_link_xdp_fd(ifindex, -1, xdp_flags);
+	bpf_xdp_detach(ifindex, xdp_flags, NULL);
 
 	return 0;
 }

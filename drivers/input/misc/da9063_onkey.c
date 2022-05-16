@@ -4,6 +4,7 @@
  * Copyright (C) 2015  Dialog Semiconductor Ltd.
  */
 
+#include <linux/devm-helpers.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/input.h>
@@ -13,7 +14,6 @@
 #include <linux/regmap.h>
 #include <linux/of.h>
 #include <linux/mfd/da9063/core.h>
-#include <linux/mfd/da9063/pdata.h>
 #include <linux/mfd/da9063/registers.h>
 #include <linux/mfd/da9062/core.h>
 #include <linux/mfd/da9062/registers.h>
@@ -183,17 +183,8 @@ static irqreturn_t da9063_onkey_irq_handler(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static void da9063_cancel_poll(void *data)
-{
-	struct da9063_onkey *onkey = data;
-
-	cancel_delayed_work_sync(&onkey->work);
-}
-
 static int da9063_onkey_probe(struct platform_device *pdev)
 {
-	struct da9063 *da9063 = dev_get_drvdata(pdev->dev.parent);
-	struct da9063_pdata *pdata = dev_get_platdata(da9063->dev);
 	struct da9063_onkey *onkey;
 	const struct of_device_id *match;
 	int irq;
@@ -220,12 +211,8 @@ static int da9063_onkey_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
-	if (pdata)
-		onkey->key_power = pdata->key_power;
-	else
-		onkey->key_power =
-			!of_property_read_bool(pdev->dev.of_node,
-					       "dlg,disable-key-power");
+	onkey->key_power = !of_property_read_bool(pdev->dev.of_node,
+						  "dlg,disable-key-power");
 
 	onkey->input = devm_input_allocate_device(&pdev->dev);
 	if (!onkey->input) {
@@ -239,14 +226,10 @@ static int da9063_onkey_probe(struct platform_device *pdev)
 	onkey->input->phys = onkey->phys;
 	onkey->input->dev.parent = &pdev->dev;
 
-	if (onkey->key_power)
-		input_set_capability(onkey->input, EV_KEY, KEY_POWER);
+	input_set_capability(onkey->input, EV_KEY, KEY_POWER);
 
-	input_set_capability(onkey->input, EV_KEY, KEY_SLEEP);
-
-	INIT_DELAYED_WORK(&onkey->work, da9063_poll_on);
-
-	error = devm_add_action(&pdev->dev, da9063_cancel_poll, onkey);
+	error = devm_delayed_work_autocancel(&pdev->dev, &onkey->work,
+					     da9063_poll_on);
 	if (error) {
 		dev_err(&pdev->dev,
 			"Failed to add cancel poll action: %d\n",
@@ -255,11 +238,8 @@ static int da9063_onkey_probe(struct platform_device *pdev)
 	}
 
 	irq = platform_get_irq_byname(pdev, "ONKEY");
-	if (irq < 0) {
-		error = irq;
-		dev_err(&pdev->dev, "Failed to get platform IRQ: %d\n", error);
-		return error;
-	}
+	if (irq < 0)
+		return irq;
 
 	error = devm_request_threaded_irq(&pdev->dev, irq,
 					  NULL, da9063_onkey_irq_handler,

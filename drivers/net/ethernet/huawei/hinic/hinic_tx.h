@@ -21,6 +21,7 @@ struct hinic_txq_stats {
 	u64     tx_busy;
 	u64     tx_wake;
 	u64     tx_dropped;
+	u64	big_frags_pkts;
 
 	struct u64_stats_sync   syncp;
 };
@@ -42,6 +43,8 @@ struct hinic_txq {
 void hinic_txq_clean_stats(struct hinic_txq *txq);
 
 void hinic_txq_get_stats(struct hinic_txq *txq, struct hinic_txq_stats *stats);
+
+netdev_tx_t hinic_lb_xmit_frame(struct sk_buff *skb, struct net_device *netdev);
 
 netdev_tx_t hinic_xmit_frame(struct sk_buff *skb, struct net_device *netdev);
 

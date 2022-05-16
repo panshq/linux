@@ -2,11 +2,13 @@
 #include <errno.h>
 #include <string.h>
 #include <regex.h>
+#include <linux/kernel.h>
+#include <linux/zalloc.h>
 
-#include "../../perf.h"
-#include "../../util/util.h"
-#include "../../util/perf_regs.h"
-#include "../../util/debug.h"
+#include "../../../perf-sys.h"
+#include "../../../util/perf_regs.h"
+#include "../../../util/debug.h"
+#include "../../../util/event.h"
 
 const struct sample_reg sample_reg_masks[] = {
 	SMPL_REG(AX, PERF_REG_X86_AX),
@@ -163,7 +165,7 @@ static int sdt_init_op_regex(void)
 /*
  * Max x86 register name length is 5(ex: %r15d). So, 6th char
  * should always contain NULL. This helps to find register name
- * length using strlen, insted of maintaing one more variable.
+ * length using strlen, instead of maintaining one more variable.
  */
 #define SDT_REG_NAME_SIZE  6
 
@@ -205,7 +207,7 @@ int arch_sdt_arg_parse_op(char *old_op, char **new_op)
 	 * and displacement 0 (Both sign and displacement 0 are
 	 * optional so it may be empty). Use one more character
 	 * to hold last NULL so that strlen can be used to find
-	 * prefix length, instead of maintaing one more variable.
+	 * prefix length, instead of maintaining one more variable.
 	 */
 	char prefix[3] = {0};
 
@@ -277,7 +279,7 @@ uint64_t arch__intr_reg_mask(void)
 		.type			= PERF_TYPE_HARDWARE,
 		.config			= PERF_COUNT_HW_CPU_CYCLES,
 		.sample_type		= PERF_SAMPLE_REGS_INTR,
-		.sample_regs_intr	= PERF_XMM_REGS_MASK,
+		.sample_regs_intr	= PERF_REG_EXTENDED_MASK,
 		.precise_ip		= 1,
 		.disabled 		= 1,
 		.exclude_kernel		= 1,
@@ -293,7 +295,7 @@ uint64_t arch__intr_reg_mask(void)
 	fd = sys_perf_event_open(&attr, 0, -1, -1, 0);
 	if (fd != -1) {
 		close(fd);
-		return (PERF_XMM_REGS_MASK | PERF_REGS_MASK);
+		return (PERF_REG_EXTENDED_MASK | PERF_REGS_MASK);
 	}
 
 	return PERF_REGS_MASK;

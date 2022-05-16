@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 OBJCOPYFLAGS		:=-O binary
 GZFLAGS			:=-9
-KBUILD_DEFCONFIG	:= defconfig
 
 ifdef CONFIG_CPU_HAS_FPU
 FPUEXT = f
@@ -48,7 +47,7 @@ ifeq ($(CSKYABI),abiv2)
 KBUILD_CFLAGS += -mno-stack-size
 endif
 
-ifdef CONFIG_STACKTRACE
+ifdef CONFIG_FRAME_POINTER
 KBUILD_CFLAGS += -mbacktrace
 endif
 
@@ -76,9 +75,6 @@ all: zImage
 
 zImage Image uImage: vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
-
-archclean:
-	$(Q)$(MAKE) $(clean)=$(boot)
 
 define archhelp
   echo  '* zImage       - Compressed kernel image (arch/$(ARCH)/boot/zImage)'

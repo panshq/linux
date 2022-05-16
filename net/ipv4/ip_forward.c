@@ -79,7 +79,7 @@ static int ip_forward_finish(struct net *net, struct sock *sk, struct sk_buff *s
 	if (unlikely(opt->optlen))
 		ip_forward_options(skb);
 
-	skb->tstamp = 0;
+	skb_clear_tstamp(skb);
 	return dst_output(net, sk, skb);
 }
 
@@ -123,7 +123,7 @@ int ip_forward(struct sk_buff *skb)
 
 	rt = skb_rtable(skb);
 
-	if (opt->is_strictroute && rt->rt_gw_family)
+	if (opt->is_strictroute && rt->rt_uses_gateway)
 		goto sr_failed;
 
 	IPCB(skb)->flags |= IPSKB_FORWARDED;

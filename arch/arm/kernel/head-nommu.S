@@ -1,15 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  linux/arch/arm/kernel/head-nommu.S
  *
  *  Copyright (C) 1994-2002 Russell King
  *  Copyright (C) 2003-2006 Hyok S. Choi
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  *  Common kernel startup code (non-paged MM)
- *
  */
 #include <linux/linkage.h>
 #include <linux/init.h>
@@ -118,7 +114,9 @@ ENTRY(secondary_startup)
 	add	r12, r12, r10
 	ret	r12
 1:	bl	__after_proc_init
+	ldr	r7, __secondary_data		@ reload r7
 	ldr	sp, [r7, #12]			@ set up the stack pointer
+	ldr	r0, [r7, #16]			@ set up task pointer
 	mov	fp, #0
 	b	secondary_start_kernel
 ENDPROC(secondary_startup)
@@ -205,6 +203,8 @@ M_CLASS(streq	r3, [r12, #PMSAv8_MAIR1])
 	bic	r0, r0, #V7M_SCB_CCR_IC
 #endif
 	str	r0, [r12, V7M_SCB_CCR]
+	/* Pass exc_ret to __mmap_switched */
+	mov	r0, r10
 #endif /* CONFIG_CPU_CP15 elif CONFIG_CPU_V7M */
 	ret	lr
 ENDPROC(__after_proc_init)

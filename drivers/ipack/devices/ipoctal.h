@@ -1,9 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/**
- * ipoctal.h
- *
+/*
  * driver for the IPOCTAL boards
-
+ *
  * Copyright (C) 2009-2012 CERN (www.cern.ch)
  * Author: Nicolas Serafini, EIC2 SA
  * Author: Samuel Iglesias Gonsalvez <siglesias@igalia.com>
@@ -15,7 +13,6 @@
 #define NR_CHANNELS		8
 #define IPOCTAL_MAX_BOARDS	16
 #define MAX_DEVICES		(NR_CHANNELS * IPOCTAL_MAX_BOARDS)
-#define RELEVANT_IFLAG(iflag) ((iflag) & (IGNBRK|BRKINT|IGNPAR|PARMRK|INPCK))
 
 /**
  * struct ipoctal_stats -- Stats since last reset

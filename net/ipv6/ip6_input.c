@@ -32,6 +32,7 @@
 
 #include <net/sock.h>
 #include <net/snmp.h>
+#include <net/udp.h>
 
 #include <net/ipv6.h>
 #include <net/protocol.h>
@@ -44,7 +45,6 @@
 #include <net/inet_ecn.h>
 #include <net/dst_metadata.h>
 
-INDIRECT_CALLABLE_DECLARE(void udp_v6_early_demux(struct sk_buff *));
 INDIRECT_CALLABLE_DECLARE(void tcp_v6_early_demux(struct sk_buff *));
 static void ip6_rcv_finish_core(struct net *net, struct sock *sk,
 				struct sk_buff *skb)
@@ -80,15 +80,33 @@ static void ip6_sublist_rcv_finish(struct list_head *head)
 {
 	struct sk_buff *skb, *next;
 
-	list_for_each_entry_safe(skb, next, head, list)
+	list_for_each_entry_safe(skb, next, head, list) {
+		skb_list_del_init(skb);
 		dst_input(skb);
+	}
+}
+
+static bool ip6_can_use_hint(const struct sk_buff *skb,
+			     const struct sk_buff *hint)
+{
+	return hint && !skb_dst(skb) &&
+	       ipv6_addr_equal(&ipv6_hdr(hint)->daddr, &ipv6_hdr(skb)->daddr);
+}
+
+static struct sk_buff *ip6_extract_route_hint(const struct net *net,
+					      struct sk_buff *skb)
+{
+	if (fib6_routes_require_src(net) || fib6_has_custom_rules(net))
+		return NULL;
+
+	return skb;
 }
 
 static void ip6_list_rcv_finish(struct net *net, struct sock *sk,
 				struct list_head *head)
 {
+	struct sk_buff *skb, *next, *hint = NULL;
 	struct dst_entry *curr_dst = NULL;
-	struct sk_buff *skb, *next;
 	struct list_head sublist;
 
 	INIT_LIST_HEAD(&sublist);
@@ -102,9 +120,15 @@ static void ip6_list_rcv_finish(struct net *net, struct sock *sk,
 		skb = l3mdev_ip6_rcv(skb);
 		if (!skb)
 			continue;
-		ip6_rcv_finish_core(net, sk, skb);
+
+		if (ip6_can_use_hint(skb, hint))
+			skb_dst_copy(skb, hint);
+		else
+			ip6_rcv_finish_core(net, sk, skb);
 		dst = skb_dst(skb);
 		if (curr_dst != dst) {
+			hint = ip6_extract_route_hint(net, skb);
+
 			/* dispatch old sublist */
 			if (!list_empty(&sublist))
 				ip6_sublist_rcv_finish(&sublist);
@@ -251,7 +275,8 @@ static struct sk_buff *ip6_rcv_core(struct sk_buff *skb, struct net_device *dev,
 	rcu_read_unlock();
 
 	/* Must drop socket now because of tproxy. */
-	skb_orphan(skb);
+	if (!skb_sk_is_prefetched(skb))
+		skb_orphan(skb);
 
 	return skb;
 err:
@@ -313,10 +338,10 @@ void ipv6_list_rcv(struct list_head *head, struct packet_type *pt,
 		list_add_tail(&skb->list, &sublist);
 	}
 	/* dispatch final sublist */
-	ip6_sublist_rcv(&sublist, curr_dev, curr_net);
+	if (!list_empty(&sublist))
+		ip6_sublist_rcv(&sublist, curr_dev, curr_net);
 }
 
-INDIRECT_CALLABLE_DECLARE(int udpv6_rcv(struct sk_buff *));
 INDIRECT_CALLABLE_DECLARE(int tcp_v6_rcv(struct sk_buff *));
 
 /*
@@ -369,7 +394,7 @@ resubmit_final:
 			/* Free reference early: we don't need it any more,
 			   and it may hold ip_conntrack module loaded
 			   indefinitely. */
-			nf_reset(skb);
+			nf_reset_ct(skb);
 
 			skb_postpull_rcsum(skb, skb_network_header(skb),
 					   skb_network_header_len(skb));
@@ -434,6 +459,7 @@ discard:
 
 static int ip6_input_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
+	skb_clear_delivery_time(skb);
 	rcu_read_lock();
 	ip6_protocol_deliver_rcu(net, skb, 0, false);
 	rcu_read_unlock();
@@ -483,7 +509,7 @@ int ip6_mc_input(struct sk_buff *skb)
 	/*
 	 *      IPv6 multicast router mode is now supported ;)
 	 */
-	if (dev_net(skb->dev)->ipv6.devconf_all->mc_forwarding &&
+	if (atomic_read(&dev_net(skb->dev)->ipv6.devconf_all->mc_forwarding) &&
 	    !(ipv6_addr_type(&hdr->daddr) &
 	      (IPV6_ADDR_LOOPBACK|IPV6_ADDR_LINKLOCAL)) &&
 	    likely(!(IP6CB(skb)->flags & IP6SKB_FORWARDED))) {

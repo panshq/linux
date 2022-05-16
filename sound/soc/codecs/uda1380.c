@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * uda1380.c - Philips UDA1380 ALSA SoC audio driver
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Copyright (c) 2007-2009 Philipp Zabel <philipp.zabel@gmail.com>
  *
@@ -113,7 +110,7 @@ static int uda1380_write(struct snd_soc_component *component, unsigned int reg,
 	/* the interpolator & decimator regs must only be written when the
 	 * codec DAI is active.
 	 */
-	if (!snd_soc_component_is_active(component) && (reg >= UDA1380_MVOL))
+	if (!snd_soc_component_active(component) && (reg >= UDA1380_MVOL))
 		return 0;
 	pr_debug("uda1380: hw write %x val %x\n", reg, value);
 	if (i2c_master_send(uda1380->i2c, data, 3) == 3) {
@@ -438,8 +435,8 @@ static int uda1380_set_dai_fmt_both(struct snd_soc_dai *codec_dai,
 		iface |= R01_SFORI_MSB | R01_SFORO_MSB;
 	}
 
-	/* DATAI is slave only, so in single-link mode, this has to be slave */
-	if ((fmt & SND_SOC_DAIFMT_MASTER_MASK) != SND_SOC_DAIFMT_CBS_CFS)
+	/* DATAI is consumer only */
+	if ((fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) != SND_SOC_DAIFMT_CBC_CFC)
 		return -EINVAL;
 
 	uda1380_write_reg_cache(component, UDA1380_IFACE, iface);
@@ -468,8 +465,8 @@ static int uda1380_set_dai_fmt_playback(struct snd_soc_dai *codec_dai,
 		iface |= R01_SFORI_MSB;
 	}
 
-	/* DATAI is slave only, so this has to be slave */
-	if ((fmt & SND_SOC_DAIFMT_MASTER_MASK) != SND_SOC_DAIFMT_CBS_CFS)
+	/* DATAI is consumer only */
+	if ((fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) != SND_SOC_DAIFMT_CBC_CFC)
 		return -EINVAL;
 
 	uda1380_write(component, UDA1380_IFACE, iface);
@@ -498,7 +495,7 @@ static int uda1380_set_dai_fmt_capture(struct snd_soc_dai *codec_dai,
 		iface |= R01_SFORO_MSB;
 	}
 
-	if ((fmt & SND_SOC_DAIFMT_MASTER_MASK) == SND_SOC_DAIFMT_CBM_CFM)
+	if ((fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) == SND_SOC_DAIFMT_CBP_CFP)
 		iface |= R01_SIM;
 
 	uda1380_write(component, UDA1380_IFACE, iface);

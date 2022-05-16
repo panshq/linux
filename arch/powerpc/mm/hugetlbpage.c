@@ -19,7 +19,6 @@
 #include <linux/swap.h>
 #include <linux/swapops.h>
 #include <linux/kmemleak.h>
-#include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/tlb.h>
 #include <asm/setup.h>
@@ -30,7 +29,8 @@ bool hugetlb_disabled = false;
 
 #define hugepd_none(hpd)	(hpd_val(hpd) == 0)
 
-#define PTE_T_ORDER	(__builtin_ffs(sizeof(pte_t)) - __builtin_ffs(sizeof(void *)))
+#define PTE_T_ORDER	(__builtin_ffs(sizeof(pte_basic_t)) - \
+			 __builtin_ffs(sizeof(void *)))
 
 pte_t *huge_pte_offset(struct mm_struct *mm, unsigned long addr, unsigned long sz)
 {
@@ -53,12 +53,14 @@ static int __hugepte_alloc(struct mm_struct *mm, hugepd_t *hpdp,
 	if (pshift >= pdshift) {
 		cachep = PGT_CACHE(PTE_T_ORDER);
 		num_hugepd = 1 << (pshift - pdshift);
-	} else if (IS_ENABLED(CONFIG_PPC_8xx)) {
-		cachep = PGT_CACHE(PTE_INDEX_SIZE);
-		num_hugepd = 1;
 	} else {
 		cachep = PGT_CACHE(pdshift - pshift);
 		num_hugepd = 1;
+	}
+
+	if (!cachep) {
+		WARN_ONCE(1, "No page table cache created for hugetlb tables");
+		return -ENOMEM;
 	}
 
 	new = kmem_cache_alloc(cachep, pgtable_gfp_flags(mm, GFP_KERNEL));
@@ -66,7 +68,7 @@ static int __hugepte_alloc(struct mm_struct *mm, hugepd_t *hpdp,
 	BUG_ON(pshift > HUGEPD_SHIFT_MASK);
 	BUG_ON((unsigned long)new & HUGEPD_SHIFT_MASK);
 
-	if (! new)
+	if (!new)
 		return -ENOMEM;
 
 	/*
@@ -104,9 +106,11 @@ static int __hugepte_alloc(struct mm_struct *mm, hugepd_t *hpdp,
  * At this point we do the placement change only for BOOK3S 64. This would
  * possibly work on other subarchs.
  */
-pte_t *huge_pte_alloc(struct mm_struct *mm, unsigned long addr, unsigned long sz)
+pte_t *huge_pte_alloc(struct mm_struct *mm, struct vm_area_struct *vma,
+		      unsigned long addr, unsigned long sz)
 {
 	pgd_t *pg;
+	p4d_t *p4;
 	pud_t *pu;
 	pmd_t *pm;
 	hugepd_t *hpdp = NULL;
@@ -116,20 +120,23 @@ pte_t *huge_pte_alloc(struct mm_struct *mm, unsigned long addr, unsigned long sz
 
 	addr &= ~(sz-1);
 	pg = pgd_offset(mm, addr);
+	p4 = p4d_offset(pg, addr);
 
 #ifdef CONFIG_PPC_BOOK3S_64
 	if (pshift == PGDIR_SHIFT)
 		/* 16GB huge page */
-		return (pte_t *) pg;
+		return (pte_t *) p4;
 	else if (pshift > PUD_SHIFT) {
 		/*
 		 * We need to use hugepd table
 		 */
 		ptl = &mm->page_table_lock;
-		hpdp = (hugepd_t *)pg;
+		hpdp = (hugepd_t *)p4;
 	} else {
 		pdshift = PUD_SHIFT;
-		pu = pud_alloc(mm, pg, addr);
+		pu = pud_alloc(mm, p4, addr);
+		if (!pu)
+			return NULL;
 		if (pshift == PUD_SHIFT)
 			return (pte_t *)pu;
 		else if (pshift > PMD_SHIFT) {
@@ -138,6 +145,8 @@ pte_t *huge_pte_alloc(struct mm_struct *mm, unsigned long addr, unsigned long sz
 		} else {
 			pdshift = PMD_SHIFT;
 			pm = pmd_alloc(mm, pu, addr);
+			if (!pm)
+				return NULL;
 			if (pshift == PMD_SHIFT)
 				/* 16MB hugepage */
 				return (pte_t *)pm;
@@ -150,16 +159,20 @@ pte_t *huge_pte_alloc(struct mm_struct *mm, unsigned long addr, unsigned long sz
 #else
 	if (pshift >= PGDIR_SHIFT) {
 		ptl = &mm->page_table_lock;
-		hpdp = (hugepd_t *)pg;
+		hpdp = (hugepd_t *)p4;
 	} else {
 		pdshift = PUD_SHIFT;
-		pu = pud_alloc(mm, pg, addr);
+		pu = pud_alloc(mm, p4, addr);
+		if (!pu)
+			return NULL;
 		if (pshift >= PUD_SHIFT) {
 			ptl = pud_lockptr(mm, pu);
 			hpdp = (hugepd_t *)pu;
 		} else {
 			pdshift = PMD_SHIFT;
 			pm = pmd_alloc(mm, pu, addr);
+			if (!pm)
+				return NULL;
 			ptl = pmd_lockptr(mm, pm);
 			hpdp = (hugepd_t *)pm;
 		}
@@ -167,6 +180,9 @@ pte_t *huge_pte_alloc(struct mm_struct *mm, unsigned long addr, unsigned long sz
 #endif
 	if (!hpdp)
 		return NULL;
+
+	if (IS_ENABLED(CONFIG_PPC_8xx) && pshift < PMD_SHIFT)
+		return pte_alloc_map(mm, (pmd_t *)hpdp, addr);
 
 	BUG_ON(!hugepd_none(*hpdp) && !hugepd_ok(*hpdp));
 
@@ -202,7 +218,7 @@ void __init pseries_add_gpage(u64 addr, u64 page_size, unsigned long number_of_p
 	}
 }
 
-int __init pseries_alloc_bootmem_huge_page(struct hstate *hstate)
+static int __init pseries_alloc_bootmem_huge_page(struct hstate *hstate)
 {
 	struct huge_bootmem_page *m;
 	if (nr_gpages == 0)
@@ -213,17 +229,22 @@ int __init pseries_alloc_bootmem_huge_page(struct hstate *hstate)
 	m->hstate = hstate;
 	return 1;
 }
+
+bool __init hugetlb_node_alloc_supported(void)
+{
+	return false;
+}
 #endif
 
 
-int __init alloc_bootmem_huge_page(struct hstate *h)
+int __init alloc_bootmem_huge_page(struct hstate *h, int nid)
 {
 
 #ifdef CONFIG_PPC_BOOK3S_64
 	if (firmware_has_feature(FW_FEATURE_LPAR) && !radix_enabled())
 		return pseries_alloc_bootmem_huge_page(h);
 #endif
-	return __alloc_bootmem_huge_page(h);
+	return __alloc_bootmem_huge_page(h, nid);
 }
 
 #ifndef CONFIG_PPC_BOOK3S_64
@@ -233,7 +254,7 @@ int __init alloc_bootmem_huge_page(struct hstate *h)
 struct hugepd_freelist {
 	struct rcu_head	rcu;
 	unsigned int index;
-	void *ptes[0];
+	void *ptes[];
 };
 
 static DEFINE_PER_CPU(struct hugepd_freelist *, hugepd_freelist_cur);
@@ -279,6 +300,21 @@ static void hugepd_free(struct mmu_gather *tlb, void *hugepte)
 static inline void hugepd_free(struct mmu_gather *tlb, void *hugepte) {}
 #endif
 
+/* Return true when the entry to be freed maps more than the area being freed */
+static bool range_is_outside_limits(unsigned long start, unsigned long end,
+				    unsigned long floor, unsigned long ceiling,
+				    unsigned long mask)
+{
+	if ((start & mask) < floor)
+		return true;
+	if (ceiling) {
+		ceiling &= mask;
+		if (!ceiling)
+			return true;
+	}
+	return end - 1 > ceiling - 1;
+}
+
 static void free_hugepd_range(struct mmu_gather *tlb, hugepd_t *hpdp, int pdshift,
 			      unsigned long start, unsigned long end,
 			      unsigned long floor, unsigned long ceiling)
@@ -294,15 +330,7 @@ static void free_hugepd_range(struct mmu_gather *tlb, hugepd_t *hpdp, int pdshif
 	if (shift > pdshift)
 		num_hugepd = 1 << (shift - pdshift);
 
-	start &= pdmask;
-	if (start < floor)
-		return;
-	if (ceiling) {
-		ceiling &= pdmask;
-		if (! ceiling)
-			return;
-	}
-	if (end - 1 > ceiling - 1)
+	if (range_is_outside_limits(start, end, floor, ceiling, pdmask))
 		return;
 
 	for (i = 0; i < num_hugepd; i++, hpdp++)
@@ -310,12 +338,23 @@ static void free_hugepd_range(struct mmu_gather *tlb, hugepd_t *hpdp, int pdshif
 
 	if (shift >= pdshift)
 		hugepd_free(tlb, hugepte);
-	else if (IS_ENABLED(CONFIG_PPC_8xx))
-		pgtable_free_tlb(tlb, hugepte,
-				 get_hugepd_cache_index(PTE_INDEX_SIZE));
 	else
 		pgtable_free_tlb(tlb, hugepte,
 				 get_hugepd_cache_index(pdshift - shift));
+}
+
+static void hugetlb_free_pte_range(struct mmu_gather *tlb, pmd_t *pmd,
+				   unsigned long addr, unsigned long end,
+				   unsigned long floor, unsigned long ceiling)
+{
+	pgtable_t token = pmd_pgtable(*pmd);
+
+	if (range_is_outside_limits(addr, end, floor, ceiling, PMD_MASK))
+		return;
+
+	pmd_clear(pmd);
+	pte_free_tlb(tlb, token, addr);
+	mm_dec_nr_ptes(tlb->mm);
 }
 
 static void hugetlb_free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
@@ -333,11 +372,17 @@ static void hugetlb_free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 		pmd = pmd_offset(pud, addr);
 		next = pmd_addr_end(addr, end);
 		if (!is_hugepd(__hugepd(pmd_val(*pmd)))) {
+			if (pmd_none_or_clear_bad(pmd))
+				continue;
+
 			/*
 			 * if it is not hugepd pointer, we should already find
 			 * it cleared.
 			 */
-			WARN_ON(!pmd_none_or_clear_bad(pmd));
+			WARN_ON(!IS_ENABLED(CONFIG_PPC_8xx));
+
+			hugetlb_free_pte_range(tlb, pmd, addr, end, floor, ceiling);
+
 			continue;
 		}
 		/*
@@ -354,24 +399,16 @@ static void hugetlb_free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
 				  addr, next, floor, ceiling);
 	} while (addr = next, addr != end);
 
-	start &= PUD_MASK;
-	if (start < floor)
-		return;
-	if (ceiling) {
-		ceiling &= PUD_MASK;
-		if (!ceiling)
-			return;
-	}
-	if (end - 1 > ceiling - 1)
+	if (range_is_outside_limits(start, end, floor, ceiling, PUD_MASK))
 		return;
 
-	pmd = pmd_offset(pud, start);
+	pmd = pmd_offset(pud, start & PUD_MASK);
 	pud_clear(pud);
-	pmd_free_tlb(tlb, pmd, start);
+	pmd_free_tlb(tlb, pmd, start & PUD_MASK);
 	mm_dec_nr_pmds(tlb->mm);
 }
 
-static void hugetlb_free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
+static void hugetlb_free_pud_range(struct mmu_gather *tlb, p4d_t *p4d,
 				   unsigned long addr, unsigned long end,
 				   unsigned long floor, unsigned long ceiling)
 {
@@ -381,7 +418,7 @@ static void hugetlb_free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
 
 	start = addr;
 	do {
-		pud = pud_offset(pgd, addr);
+		pud = pud_offset(p4d, addr);
 		next = pud_addr_end(addr, end);
 		if (!is_hugepd(__hugepd(pud_val(*pud)))) {
 			if (pud_none_or_clear_bad(pud))
@@ -405,20 +442,12 @@ static void hugetlb_free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
 		}
 	} while (addr = next, addr != end);
 
-	start &= PGDIR_MASK;
-	if (start < floor)
-		return;
-	if (ceiling) {
-		ceiling &= PGDIR_MASK;
-		if (!ceiling)
-			return;
-	}
-	if (end - 1 > ceiling - 1)
+	if (range_is_outside_limits(start, end, floor, ceiling, PGDIR_MASK))
 		return;
 
-	pud = pud_offset(pgd, start);
-	pgd_clear(pgd);
-	pud_free_tlb(tlb, pud, start);
+	pud = pud_offset(p4d, start & PGDIR_MASK);
+	p4d_clear(p4d);
+	pud_free_tlb(tlb, pud, start & PGDIR_MASK);
 	mm_dec_nr_puds(tlb->mm);
 }
 
@@ -430,6 +459,7 @@ void hugetlb_free_pgd_range(struct mmu_gather *tlb,
 			    unsigned long floor, unsigned long ceiling)
 {
 	pgd_t *pgd;
+	p4d_t *p4d;
 	unsigned long next;
 
 	/*
@@ -452,10 +482,11 @@ void hugetlb_free_pgd_range(struct mmu_gather *tlb,
 	do {
 		next = pgd_addr_end(addr, end);
 		pgd = pgd_offset(tlb->mm, addr);
+		p4d = p4d_offset(pgd, addr);
 		if (!is_hugepd(__hugepd(pgd_val(*pgd)))) {
-			if (pgd_none_or_clear_bad(pgd))
+			if (p4d_none_or_clear_bad(p4d))
 				continue;
-			hugetlb_free_pud_range(tlb, pgd, addr, next, floor, ceiling);
+			hugetlb_free_pud_range(tlb, p4d, addr, next, floor, ceiling);
 		} else {
 			unsigned long more;
 			/*
@@ -468,7 +499,7 @@ void hugetlb_free_pgd_range(struct mmu_gather *tlb,
 			if (more > next)
 				next = more;
 
-			free_hugepd_range(tlb, (hugepd_t *)pgd, PGDIR_SHIFT,
+			free_hugepd_range(tlb, (hugepd_t *)p4d, PGDIR_SHIFT,
 					  addr, next, floor, ceiling);
 		}
 	} while (addr = next, addr != end);
@@ -511,27 +542,26 @@ retry:
 	return page;
 }
 
-static unsigned long hugepte_addr_end(unsigned long addr, unsigned long end,
-				      unsigned long sz)
+#ifdef HAVE_ARCH_HUGETLB_UNMAPPED_AREA
+static inline int file_to_psize(struct file *file)
 {
-	unsigned long __boundary = (addr + sz) & ~(sz-1);
-	return (__boundary - 1 < end - 1) ? __boundary : end;
+	struct hstate *hstate = hstate_file(file);
+	return shift_to_mmu_psize(huge_page_shift(hstate));
 }
 
-#ifdef CONFIG_PPC_MM_SLICES
 unsigned long hugetlb_get_unmapped_area(struct file *file, unsigned long addr,
 					unsigned long len, unsigned long pgoff,
 					unsigned long flags)
 {
-	struct hstate *hstate = hstate_file(file);
-	int mmu_psize = shift_to_mmu_psize(huge_page_shift(hstate));
-
 #ifdef CONFIG_PPC_RADIX_MMU
 	if (radix_enabled())
 		return radix__hugetlb_get_unmapped_area(file, addr, len,
 						       pgoff, flags);
 #endif
-	return slice_get_unmapped_area(addr, len, flags, mmu_psize, 1);
+#ifdef CONFIG_PPC_MM_SLICES
+	return slice_get_unmapped_area(addr, len, flags, file_to_psize(file), 1);
+#endif
+	BUG();
 }
 #endif
 
@@ -546,7 +576,7 @@ unsigned long vma_mmu_pagesize(struct vm_area_struct *vma)
 	return vma_kernel_pagesize(vma);
 }
 
-static int __init add_huge_page_size(unsigned long long size)
+bool __init arch_hugetlb_valid_size(unsigned long size)
 {
 	int shift = __ffs(size);
 	int mmu_psize;
@@ -554,40 +584,31 @@ static int __init add_huge_page_size(unsigned long long size)
 	/* Check that it is a page size supported by the hardware and
 	 * that it fits within pagetable and slice limits. */
 	if (size <= PAGE_SIZE || !is_power_of_2(size))
-		return -EINVAL;
+		return false;
 
 	mmu_psize = check_and_get_huge_psize(shift);
 	if (mmu_psize < 0)
-		return -EINVAL;
+		return false;
 
 	BUG_ON(mmu_psize_defs[mmu_psize].shift != shift);
 
-	/* Return if huge page size has already been setup */
-	if (size_to_hstate(size))
-		return 0;
+	return true;
+}
+
+static int __init add_huge_page_size(unsigned long long size)
+{
+	int shift = __ffs(size);
+
+	if (!arch_hugetlb_valid_size((unsigned long)size))
+		return -EINVAL;
 
 	hugetlb_add_hstate(shift - PAGE_SHIFT);
-
 	return 0;
 }
 
-static int __init hugepage_setup_sz(char *str)
-{
-	unsigned long long size;
-
-	size = memparse(str, &str);
-
-	if (add_huge_page_size(size) != 0) {
-		hugetlb_bad_size();
-		pr_err("Invalid huge page size specified(%llu)\n", size);
-	}
-
-	return 1;
-}
-__setup("hugepagesz=", hugepage_setup_sz);
-
 static int __init hugetlbpage_init(void)
 {
+	bool configured = false;
 	int psize;
 
 	if (hugetlb_disabled) {
@@ -632,101 +653,39 @@ static int __init hugetlbpage_init(void)
 		 * if we have pdshift and shift value same, we don't
 		 * use pgt cache for hugepd.
 		 */
-		if (pdshift > shift && IS_ENABLED(CONFIG_PPC_8xx))
-			pgtable_cache_add(PTE_INDEX_SIZE);
-		else if (pdshift > shift)
-			pgtable_cache_add(pdshift - shift);
-		else if (IS_ENABLED(CONFIG_PPC_FSL_BOOK3E) || IS_ENABLED(CONFIG_PPC_8xx))
+		if (pdshift > shift) {
+			if (!IS_ENABLED(CONFIG_PPC_8xx))
+				pgtable_cache_add(pdshift - shift);
+		} else if (IS_ENABLED(CONFIG_PPC_FSL_BOOK3E) ||
+			   IS_ENABLED(CONFIG_PPC_8xx)) {
 			pgtable_cache_add(PTE_T_ORDER);
+		}
+
+		configured = true;
 	}
 
-	if (IS_ENABLED(CONFIG_HUGETLB_PAGE_SIZE_VARIABLE))
-		hugetlbpage_init_default();
+	if (!configured)
+		pr_info("Failed to initialize. Disabling HugeTLB");
 
 	return 0;
 }
 
 arch_initcall(hugetlbpage_init);
 
-void flush_dcache_icache_hugepage(struct page *page)
+void __init gigantic_hugetlb_cma_reserve(void)
 {
-	int i;
-	void *start;
+	unsigned long order = 0;
 
-	BUG_ON(!PageCompound(page));
+	if (radix_enabled())
+		order = PUD_SHIFT - PAGE_SHIFT;
+	else if (!firmware_has_feature(FW_FEATURE_LPAR) && mmu_psize_defs[MMU_PAGE_16G].shift)
+		/*
+		 * For pseries we do use ibm,expected#pages for reserving 16G pages.
+		 */
+		order = mmu_psize_to_shift(MMU_PAGE_16G) - PAGE_SHIFT;
 
-	for (i = 0; i < (1UL << compound_order(page)); i++) {
-		if (!PageHighMem(page)) {
-			__flush_dcache_icache(page_address(page+i));
-		} else {
-			start = kmap_atomic(page+i);
-			__flush_dcache_icache(start);
-			kunmap_atomic(start);
-		}
+	if (order) {
+		VM_WARN_ON(order < MAX_ORDER);
+		hugetlb_cma_reserve(order);
 	}
-}
-
-static int gup_hugepte(pte_t *ptep, unsigned long sz, unsigned long addr,
-		       unsigned long end, int write, struct page **pages, int *nr)
-{
-	unsigned long pte_end;
-	struct page *head, *page;
-	pte_t pte;
-	int refs;
-
-	pte_end = (addr + sz) & ~(sz-1);
-	if (pte_end < end)
-		end = pte_end;
-
-	pte = READ_ONCE(*ptep);
-
-	if (!pte_access_permitted(pte, write))
-		return 0;
-
-	/* hugepages are never "special" */
-	VM_BUG_ON(!pfn_valid(pte_pfn(pte)));
-
-	refs = 0;
-	head = pte_page(pte);
-
-	page = head + ((addr & (sz-1)) >> PAGE_SHIFT);
-	do {
-		VM_BUG_ON(compound_head(page) != head);
-		pages[*nr] = page;
-		(*nr)++;
-		page++;
-		refs++;
-	} while (addr += PAGE_SIZE, addr != end);
-
-	if (!page_cache_add_speculative(head, refs)) {
-		*nr -= refs;
-		return 0;
-	}
-
-	if (unlikely(pte_val(pte) != pte_val(*ptep))) {
-		/* Could be optimized better */
-		*nr -= refs;
-		while (refs--)
-			put_page(head);
-		return 0;
-	}
-
-	return 1;
-}
-
-int gup_huge_pd(hugepd_t hugepd, unsigned long addr, unsigned int pdshift,
-		unsigned long end, int write, struct page **pages, int *nr)
-{
-	pte_t *ptep;
-	unsigned long sz = 1UL << hugepd_shift(hugepd);
-	unsigned long next;
-
-	ptep = hugepte_offset(hugepd, addr, pdshift);
-	do {
-		next = hugepte_addr_end(addr, end, sz);
-		if (!gup_hugepte(ptep, sz, addr, end, write, pages, nr))
-			return 0;
-	} while (ptep++, addr = next, addr != end);
-
-	return 1;
 }

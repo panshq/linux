@@ -146,7 +146,7 @@ struct sve_context {
  * vector length beyond its initial architectural limit of 2048 bits
  * (16 quadwords).
  *
- * See linux/Documentation/arm64/sve.txt for a description of the VL/VQ
+ * See linux/Documentation/arm64/sve.rst for a description of the VL/VQ
  * terminology.
  */
 #define SVE_VQ_BYTES		__SVE_VQ_BYTES	/* bytes per quadword */
@@ -179,7 +179,7 @@ struct sve_context {
  * The same convention applies when returning from a signal: a caller
  * will need to remove or resize the sve_context block if it wants to
  * make the SVE registers live when they were previously non-live or
- * vice-versa.  This may require the the caller to allocate fresh
+ * vice-versa.  This may require the caller to allocate fresh
  * memory and/or move other context blocks in the signal frame.
  *
  * Changing the vector length during signal return is not permitted:

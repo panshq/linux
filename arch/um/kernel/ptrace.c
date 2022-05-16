@@ -1,12 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2000 - 2007 Jeff Dike (jdike@{addtoit,linux.intel}.com)
- * Licensed under the GPL
  */
 
 #include <linux/audit.h>
 #include <linux/ptrace.h>
 #include <linux/sched.h>
-#include <linux/tracehook.h>
 #include <linux/uaccess.h>
 #include <asm/ptrace-abi.h>
 
@@ -112,13 +111,12 @@ long arch_ptrace(struct task_struct *child, long request,
 	return ret;
 }
 
-static void send_sigtrap(struct task_struct *tsk, struct uml_pt_regs *regs,
-		  int error_code)
+static void send_sigtrap(struct uml_pt_regs *regs, int error_code)
 {
 	/* Send us the fake SIGTRAP */
 	force_sig_fault(SIGTRAP, TRAP_BRKPT,
 			/* User-mode eip? */
-			UPT_IS_USER(regs) ? (void __user *) UPT_IP(regs) : NULL, tsk);
+			UPT_IS_USER(regs) ? (void __user *) UPT_IP(regs) : NULL);
 }
 
 /*
@@ -136,7 +134,7 @@ int syscall_trace_enter(struct pt_regs *regs)
 	if (!test_thread_flag(TIF_SYSCALL_TRACE))
 		return 0;
 
-	return tracehook_report_syscall_entry(regs);
+	return ptrace_report_syscall_entry(regs);
 }
 
 void syscall_trace_leave(struct pt_regs *regs)
@@ -147,12 +145,12 @@ void syscall_trace_leave(struct pt_regs *regs)
 
 	/* Fake a debug trap */
 	if (ptraced & PT_DTRACE)
-		send_sigtrap(current, &regs->regs, 0);
+		send_sigtrap(&regs->regs, 0);
 
 	if (!test_thread_flag(TIF_SYSCALL_TRACE))
 		return;
 
-	tracehook_report_syscall_exit(regs, 0);
+	ptrace_report_syscall_exit(regs, 0);
 	/* force do_signal() --> is_syscall() */
 	if (ptraced & PT_PTRACED)
 		set_thread_flag(TIF_SIGPENDING);

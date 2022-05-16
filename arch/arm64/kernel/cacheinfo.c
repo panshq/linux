@@ -17,6 +17,15 @@
 #define CLIDR_CTYPE(clidr, level)	\
 	(((clidr) & CLIDR_CTYPE_MASK(level)) >> CLIDR_CTYPE_SHIFT(level))
 
+int cache_line_size(void)
+{
+	if (coherency_max_size != 0)
+		return coherency_max_size;
+
+	return cache_line_size_of_cpu();
+}
+EXPORT_SYMBOL_GPL(cache_line_size);
+
 static inline enum cache_type get_cache_type(int level)
 {
 	u64 clidr;
@@ -34,7 +43,7 @@ static void ci_leaf_init(struct cacheinfo *this_leaf,
 	this_leaf->type = type;
 }
 
-static int __init_cache_level(unsigned int cpu)
+int init_cache_level(unsigned int cpu)
 {
 	unsigned int ctype, level, leaves, fw_level;
 	struct cpu_cacheinfo *this_cpu_ci = get_cpu_cacheinfo(cpu);
@@ -69,7 +78,7 @@ static int __init_cache_level(unsigned int cpu)
 	return 0;
 }
 
-static int __populate_cache_leaves(unsigned int cpu)
+int populate_cache_leaves(unsigned int cpu)
 {
 	unsigned int level, idx;
 	enum cache_type type;
@@ -88,6 +97,3 @@ static int __populate_cache_leaves(unsigned int cpu)
 	}
 	return 0;
 }
-
-DEFINE_SMP_CALL_CACHE_FUNCTION(init_cache_level)
-DEFINE_SMP_CALL_CACHE_FUNCTION(populate_cache_leaves)

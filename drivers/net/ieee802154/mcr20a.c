@@ -800,7 +800,7 @@ mcr20a_handle_rx_read_buf_complete(void *context)
 	if (!skb)
 		return;
 
-	memcpy(skb_put(skb, len), lp->rx_buf, len);
+	__skb_put_data(skb, lp->rx_buf, len);
 	ieee802154_rx_irqsafe(lp->hw, skb, lp->rx_lqi[0]);
 
 	print_hex_dump_debug("mcr20a rx: ", DUMP_PREFIX_OFFSET, 16, 1,
@@ -976,8 +976,8 @@ static void mcr20a_hw_setup(struct mcr20a_local *lp)
 	dev_dbg(printdev(lp), "%s\n", __func__);
 
 	phy->symbol_duration = 16;
-	phy->lifs_period = 40;
-	phy->sifs_period = 12;
+	phy->lifs_period = 40 * phy->symbol_duration;
+	phy->sifs_period = 12 * phy->symbol_duration;
 
 	hw->flags = IEEE802154_HW_TX_OMIT_CKSUM |
 			IEEE802154_HW_AFILT |
@@ -1335,7 +1335,7 @@ free_dev:
 	return ret;
 }
 
-static int mcr20a_remove(struct spi_device *spi)
+static void mcr20a_remove(struct spi_device *spi)
 {
 	struct mcr20a_local *lp = spi_get_drvdata(spi);
 
@@ -1343,8 +1343,6 @@ static int mcr20a_remove(struct spi_device *spi)
 
 	ieee802154_unregister_hw(lp->hw);
 	ieee802154_free_hw(lp->hw);
-
-	return 0;
 }
 
 static const struct of_device_id mcr20a_of_match[] = {

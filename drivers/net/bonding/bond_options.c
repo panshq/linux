@@ -24,6 +24,8 @@ static int bond_option_updelay_set(struct bonding *bond,
 				   const struct bond_opt_value *newval);
 static int bond_option_downdelay_set(struct bonding *bond,
 				     const struct bond_opt_value *newval);
+static int bond_option_peer_notif_delay_set(struct bonding *bond,
+					    const struct bond_opt_value *newval);
 static int bond_option_use_carrier_set(struct bonding *bond,
 				       const struct bond_opt_value *newval);
 static int bond_option_arp_interval_set(struct bonding *bond,
@@ -32,6 +34,10 @@ static int bond_option_arp_ip_target_add(struct bonding *bond, __be32 target);
 static int bond_option_arp_ip_target_rem(struct bonding *bond, __be32 target);
 static int bond_option_arp_ip_targets_set(struct bonding *bond,
 					  const struct bond_opt_value *newval);
+#if IS_ENABLED(CONFIG_IPV6)
+static int bond_option_ns_ip6_targets_set(struct bonding *bond,
+					  const struct bond_opt_value *newval);
+#endif
 static int bond_option_arp_validate_set(struct bonding *bond,
 					const struct bond_opt_value *newval);
 static int bond_option_arp_all_targets_set(struct bonding *bond,
@@ -56,6 +62,8 @@ static int bond_option_lp_interval_set(struct bonding *bond,
 				       const struct bond_opt_value *newval);
 static int bond_option_pps_set(struct bonding *bond,
 			       const struct bond_opt_value *newval);
+static int bond_option_lacp_active_set(struct bonding *bond,
+				       const struct bond_opt_value *newval);
 static int bond_option_lacp_rate_set(struct bonding *bond,
 				     const struct bond_opt_value *newval);
 static int bond_option_ad_select_set(struct bonding *bond,
@@ -74,6 +82,8 @@ static int bond_option_ad_actor_system_set(struct bonding *bond,
 					   const struct bond_opt_value *newval);
 static int bond_option_ad_user_port_key_set(struct bonding *bond,
 					    const struct bond_opt_value *newval);
+static int bond_option_missed_max_set(struct bonding *bond,
+				      const struct bond_opt_value *newval);
 
 
 static const struct bond_opt_value bond_mode_tbl[] = {
@@ -94,12 +104,13 @@ static const struct bond_opt_value bond_pps_tbl[] = {
 };
 
 static const struct bond_opt_value bond_xmit_hashtype_tbl[] = {
-	{ "layer2",   BOND_XMIT_POLICY_LAYER2, BOND_VALFLAG_DEFAULT},
-	{ "layer3+4", BOND_XMIT_POLICY_LAYER34, 0},
-	{ "layer2+3", BOND_XMIT_POLICY_LAYER23, 0},
-	{ "encap2+3", BOND_XMIT_POLICY_ENCAP23, 0},
-	{ "encap3+4", BOND_XMIT_POLICY_ENCAP34, 0},
-	{ NULL,       -1,                       0},
+	{ "layer2",      BOND_XMIT_POLICY_LAYER2,      BOND_VALFLAG_DEFAULT},
+	{ "layer3+4",    BOND_XMIT_POLICY_LAYER34,     0},
+	{ "layer2+3",    BOND_XMIT_POLICY_LAYER23,     0},
+	{ "encap2+3",    BOND_XMIT_POLICY_ENCAP23,     0},
+	{ "encap3+4",    BOND_XMIT_POLICY_ENCAP34,     0},
+	{ "vlan+srcmac", BOND_XMIT_POLICY_VLAN_SRCMAC, 0},
+	{ NULL,          -1,                           0},
 };
 
 static const struct bond_opt_value bond_arp_validate_tbl[] = {
@@ -130,6 +141,12 @@ static const struct bond_opt_value bond_intmax_tbl[] = {
 	{ "off",     0,       BOND_VALFLAG_DEFAULT},
 	{ "maxval",  INT_MAX, BOND_VALFLAG_MAX},
 	{ NULL,      -1,      0}
+};
+
+static const struct bond_opt_value bond_lacp_active[] = {
+	{ "off", 0,  0},
+	{ "on",  1,  BOND_VALFLAG_DEFAULT},
+	{ NULL,  -1, 0}
 };
 
 static const struct bond_opt_value bond_lacp_rate_tbl[] = {
@@ -202,6 +219,13 @@ static const struct bond_opt_value bond_ad_user_port_key_tbl[] = {
 	{ NULL,      -1,    0},
 };
 
+static const struct bond_opt_value bond_missed_max_tbl[] = {
+	{ "minval",	1,	BOND_VALFLAG_MIN},
+	{ "maxval",	255,	BOND_VALFLAG_MAX},
+	{ "default",	2,	BOND_VALFLAG_DEFAULT},
+	{ NULL,		-1,	0},
+};
+
 static const struct bond_option bond_opts[BOND_OPT_LAST] = {
 	[BOND_OPT_MODE] = {
 		.id = BOND_OPT_MODE,
@@ -259,6 +283,15 @@ static const struct bond_option bond_opts[BOND_OPT_LAST] = {
 		.values = bond_intmax_tbl,
 		.set = bond_option_arp_interval_set
 	},
+	[BOND_OPT_MISSED_MAX] = {
+		.id = BOND_OPT_MISSED_MAX,
+		.name = "arp_missed_max",
+		.desc = "Maximum number of missed ARP interval",
+		.unsuppmodes = BIT(BOND_MODE_8023AD) | BIT(BOND_MODE_TLB) |
+			       BIT(BOND_MODE_ALB),
+		.values = bond_missed_max_tbl,
+		.set = bond_option_missed_max_set
+	},
 	[BOND_OPT_ARP_TARGETS] = {
 		.id = BOND_OPT_ARP_TARGETS,
 		.name = "arp_ip_target",
@@ -266,6 +299,15 @@ static const struct bond_option bond_opts[BOND_OPT_LAST] = {
 		.flags = BOND_OPTFLAG_RAWVAL,
 		.set = bond_option_arp_ip_targets_set
 	},
+#if IS_ENABLED(CONFIG_IPV6)
+	[BOND_OPT_NS_TARGETS] = {
+		.id = BOND_OPT_NS_TARGETS,
+		.name = "ns_ip6_target",
+		.desc = "NS targets in ffff:ffff::ffff:ffff form",
+		.flags = BOND_OPTFLAG_RAWVAL,
+		.set = bond_option_ns_ip6_targets_set
+	},
+#endif
 	[BOND_OPT_DOWNDELAY] = {
 		.id = BOND_OPT_DOWNDELAY,
 		.name = "downdelay",
@@ -279,6 +321,15 @@ static const struct bond_option bond_opts[BOND_OPT_LAST] = {
 		.desc = "Delay before considering link up, in milliseconds",
 		.values = bond_intmax_tbl,
 		.set = bond_option_updelay_set
+	},
+	[BOND_OPT_LACP_ACTIVE] = {
+		.id = BOND_OPT_LACP_ACTIVE,
+		.name = "lacp_active",
+		.desc = "Send LACPDU frames with configured lacp rate or acts as speak when spoken to",
+		.flags = BOND_OPTFLAG_IFDOWN,
+		.unsuppmodes = BOND_MODE_ALL_EX(BIT(BOND_MODE_8023AD)),
+		.values = bond_lacp_active,
+		.set = bond_option_lacp_active_set
 	},
 	[BOND_OPT_LACP_RATE] = {
 		.id = BOND_OPT_LACP_RATE,
@@ -424,6 +475,13 @@ static const struct bond_option bond_opts[BOND_OPT_LAST] = {
 		.desc = "Number of peer notifications to send on failover event",
 		.values = bond_num_peer_notif_tbl,
 		.set = bond_option_num_peer_notif_set
+	},
+	[BOND_OPT_PEER_NOTIF_DELAY] = {
+		.id = BOND_OPT_PEER_NOTIF_DELAY,
+		.name = "peer_notif_delay",
+		.desc = "Delay between each peer notification on failover event, in milliseconds",
+		.values = bond_intmax_tbl,
+		.set = bond_option_peer_notif_delay_set
 	}
 };
 
@@ -630,6 +688,15 @@ static void bond_opt_error_interpret(struct bonding *bond,
 		netdev_err(bond->dev, "option %s: unable to set because the bond device is up\n",
 			   opt->name);
 		break;
+	case -ENODEV:
+		if (val && val->string) {
+			p = strchr(val->string, '\n');
+			if (p)
+				*p = '\0';
+			netdev_err(bond->dev, "option %s: interface %s does not exist!\n",
+				   opt->name, val->string);
+		}
+		break;
 	default:
 		break;
 	}
@@ -686,7 +753,7 @@ out:
 int __bond_opt_set_notify(struct bonding *bond,
 			  unsigned int option, struct bond_opt_value *val)
 {
-	int ret = -ENOENT;
+	int ret;
 
 	ASSERT_RTNL();
 
@@ -736,6 +803,32 @@ const struct bond_option *bond_opt_get(unsigned int option)
 	return &bond_opts[option];
 }
 
+static bool bond_set_xfrm_features(struct bonding *bond)
+{
+	if (!IS_ENABLED(CONFIG_XFRM_OFFLOAD))
+		return false;
+
+	if (BOND_MODE(bond) == BOND_MODE_ACTIVEBACKUP)
+		bond->dev->wanted_features |= BOND_XFRM_FEATURES;
+	else
+		bond->dev->wanted_features &= ~BOND_XFRM_FEATURES;
+
+	return true;
+}
+
+static bool bond_set_tls_features(struct bonding *bond)
+{
+	if (!IS_ENABLED(CONFIG_TLS_DEVICE))
+		return false;
+
+	if (bond_sk_check(bond))
+		bond->dev->wanted_features |= BOND_TLS_FEATURES;
+	else
+		bond->dev->wanted_features &= ~BOND_TLS_FEATURES;
+
+	return true;
+}
+
 static int bond_option_mode_set(struct bonding *bond,
 				const struct bond_opt_value *newval)
 {
@@ -762,6 +855,16 @@ static int bond_option_mode_set(struct bonding *bond,
 	bond->params.arp_validate = BOND_ARP_VALIDATE_NONE;
 	bond->params.mode = newval->value;
 
+	if (bond->dev->reg_state == NETREG_REGISTERED) {
+		bool update = false;
+
+		update |= bond_set_xfrm_features(bond);
+		update |= bond_set_tls_features(bond);
+
+		if (update)
+			netdev_update_features(bond->dev);
+	}
+
 	return 0;
 }
 
@@ -783,14 +886,12 @@ static int bond_option_active_slave_set(struct bonding *bond,
 
 	if (slave_dev) {
 		if (!netif_is_bond_slave(slave_dev)) {
-			netdev_err(bond->dev, "Device %s is not bonding slave\n",
-				   slave_dev->name);
+			slave_err(bond->dev, slave_dev, "Device is not bonding slave\n");
 			return -EINVAL;
 		}
 
 		if (bond->dev != netdev_master_upper_dev_get(slave_dev)) {
-			netdev_err(bond->dev, "Device %s is not our slave\n",
-				   slave_dev->name);
+			slave_err(bond->dev, slave_dev, "Device is not our slave\n");
 			return -EINVAL;
 		}
 	}
@@ -809,18 +910,15 @@ static int bond_option_active_slave_set(struct bonding *bond,
 
 		if (new_active == old_active) {
 			/* do nothing */
-			netdev_dbg(bond->dev, "%s is already the current active slave\n",
-				   new_active->dev->name);
+			slave_dbg(bond->dev, new_active->dev, "is already the current active slave\n");
 		} else {
 			if (old_active && (new_active->link == BOND_LINK_UP) &&
 			    bond_slave_is_up(new_active)) {
-				netdev_dbg(bond->dev, "Setting %s as active slave\n",
-					   new_active->dev->name);
+				slave_dbg(bond->dev, new_active->dev, "Setting as active slave\n");
 				bond_change_active_slave(bond, new_active);
 			} else {
-				netdev_err(bond->dev, "Could not set %s as active slave; either %s is down or the link is down\n",
-					   new_active->dev->name,
-					   new_active->dev->name);
+				slave_err(bond->dev, new_active->dev, "Could not set as active slave; either %s is down or the link is down\n",
+					  new_active->dev->name);
 				ret = -EINVAL;
 			}
 		}
@@ -846,6 +944,9 @@ static int bond_option_miimon_set(struct bonding *bond,
 	if (bond->params.downdelay)
 		netdev_dbg(bond->dev, "Note: Updating downdelay (to %d) since it is a multiple of the miimon value\n",
 			   bond->params.downdelay * bond->params.miimon);
+	if (bond->params.peer_notif_delay)
+		netdev_dbg(bond->dev, "Note: Updating peer_notif_delay (to %d) since it is a multiple of the miimon value\n",
+			   bond->params.peer_notif_delay * bond->params.miimon);
 	if (newval->value && bond->params.arp_interval) {
 		netdev_dbg(bond->dev, "MII monitoring cannot be used with ARP monitoring - disabling ARP monitoring...\n");
 		bond->params.arp_interval = 0;
@@ -869,52 +970,59 @@ static int bond_option_miimon_set(struct bonding *bond,
 	return 0;
 }
 
-/* Set up and down delays. These must be multiples of the
- * MII monitoring value, and are stored internally as the multiplier.
- * Thus, we must translate to MS for the real world.
+/* Set up, down and peer notification delays. These must be multiples
+ * of the MII monitoring value, and are stored internally as the
+ * multiplier. Thus, we must translate to MS for the real world.
  */
-static int bond_option_updelay_set(struct bonding *bond,
-				   const struct bond_opt_value *newval)
+static int _bond_option_delay_set(struct bonding *bond,
+				  const struct bond_opt_value *newval,
+				  const char *name,
+				  int *target)
 {
 	int value = newval->value;
 
 	if (!bond->params.miimon) {
-		netdev_err(bond->dev, "Unable to set up delay as MII monitoring is disabled\n");
+		netdev_err(bond->dev, "Unable to set %s as MII monitoring is disabled\n",
+			   name);
 		return -EPERM;
 	}
 	if ((value % bond->params.miimon) != 0) {
-		netdev_warn(bond->dev, "up delay (%d) is not a multiple of miimon (%d), updelay rounded to %d ms\n",
+		netdev_warn(bond->dev,
+			    "%s (%d) is not a multiple of miimon (%d), value rounded to %d ms\n",
+			    name,
 			    value, bond->params.miimon,
 			    (value / bond->params.miimon) *
 			    bond->params.miimon);
 	}
-	bond->params.updelay = value / bond->params.miimon;
-	netdev_dbg(bond->dev, "Setting up delay to %d\n",
-		   bond->params.updelay * bond->params.miimon);
+	*target = value / bond->params.miimon;
+	netdev_dbg(bond->dev, "Setting %s to %d\n",
+		   name,
+		   *target * bond->params.miimon);
 
 	return 0;
+}
+
+static int bond_option_updelay_set(struct bonding *bond,
+				   const struct bond_opt_value *newval)
+{
+	return _bond_option_delay_set(bond, newval, "up delay",
+				      &bond->params.updelay);
 }
 
 static int bond_option_downdelay_set(struct bonding *bond,
 				     const struct bond_opt_value *newval)
 {
-	int value = newval->value;
+	return _bond_option_delay_set(bond, newval, "down delay",
+				      &bond->params.downdelay);
+}
 
-	if (!bond->params.miimon) {
-		netdev_err(bond->dev, "Unable to set down delay as MII monitoring is disabled\n");
-		return -EPERM;
-	}
-	if ((value % bond->params.miimon) != 0) {
-		netdev_warn(bond->dev, "down delay (%d) is not a multiple of miimon (%d), delay rounded to %d ms\n",
-			    value, bond->params.miimon,
-			    (value / bond->params.miimon) *
-			    bond->params.miimon);
-	}
-	bond->params.downdelay = value / bond->params.miimon;
-	netdev_dbg(bond->dev, "Setting down delay to %d\n",
-		   bond->params.downdelay * bond->params.miimon);
-
-	return 0;
+static int bond_option_peer_notif_delay_set(struct bonding *bond,
+					    const struct bond_opt_value *newval)
+{
+	int ret = _bond_option_delay_set(bond, newval,
+					 "peer notification delay",
+					 &bond->params.peer_notif_delay);
+	return ret;
 }
 
 static int bond_option_use_carrier_set(struct bonding *bond,
@@ -957,7 +1065,7 @@ static int bond_option_arp_interval_set(struct bonding *bond,
 			cancel_delayed_work_sync(&bond->arp_work);
 		} else {
 			/* arp_validate can be set only in active-backup mode */
-			bond->recv_probe = bond_arp_rcv;
+			bond->recv_probe = bond_rcv_validate;
 			cancel_delayed_work_sync(&bond->mii_work);
 			queue_delayed_work(bond->wq, &bond->arp_work, 0);
 		}
@@ -1089,6 +1197,65 @@ static int bond_option_arp_ip_targets_set(struct bonding *bond,
 	return ret;
 }
 
+#if IS_ENABLED(CONFIG_IPV6)
+static void _bond_options_ns_ip6_target_set(struct bonding *bond, int slot,
+					    struct in6_addr *target,
+					    unsigned long last_rx)
+{
+	struct in6_addr *targets = bond->params.ns_targets;
+	struct list_head *iter;
+	struct slave *slave;
+
+	if (slot >= 0 && slot < BOND_MAX_NS_TARGETS) {
+		bond_for_each_slave(bond, slave, iter)
+			slave->target_last_arp_rx[slot] = last_rx;
+		targets[slot] = *target;
+	}
+}
+
+void bond_option_ns_ip6_targets_clear(struct bonding *bond)
+{
+	struct in6_addr addr_any = in6addr_any;
+	int i;
+
+	for (i = 0; i < BOND_MAX_NS_TARGETS; i++)
+		_bond_options_ns_ip6_target_set(bond, i, &addr_any, 0);
+}
+
+static int bond_option_ns_ip6_targets_set(struct bonding *bond,
+					  const struct bond_opt_value *newval)
+{
+	struct in6_addr *target = (struct in6_addr *)newval->extra;
+	struct in6_addr *targets = bond->params.ns_targets;
+	struct in6_addr addr_any = in6addr_any;
+	int index;
+
+	if (!bond_is_ip6_target_ok(target)) {
+		netdev_err(bond->dev, "invalid NS target %pI6c specified for addition\n",
+			   target);
+		return -EINVAL;
+	}
+
+	if (bond_get_targets_ip6(targets, target) != -1) { /* dup */
+		netdev_err(bond->dev, "NS target %pI6c is already present\n",
+			   target);
+		return -EINVAL;
+	}
+
+	index = bond_get_targets_ip6(targets, &addr_any); /* first free slot */
+	if (index == -1) {
+		netdev_err(bond->dev, "NS target table is full!\n");
+		return -EINVAL;
+	}
+
+	netdev_dbg(bond->dev, "Adding NS target %pI6c\n", target);
+
+	_bond_options_ns_ip6_target_set(bond, index, target, jiffies);
+
+	return 0;
+}
+#endif
+
 static int bond_option_arp_validate_set(struct bonding *bond,
 					const struct bond_opt_value *newval)
 {
@@ -1105,6 +1272,16 @@ static int bond_option_arp_all_targets_set(struct bonding *bond,
 	netdev_dbg(bond->dev, "Setting arp_all_targets to %s (%llu)\n",
 		   newval->string, newval->value);
 	bond->params.arp_all_targets = newval->value;
+
+	return 0;
+}
+
+static int bond_option_missed_max_set(struct bonding *bond,
+				      const struct bond_opt_value *newval)
+{
+	netdev_dbg(bond->dev, "Setting missed max to %s (%llu)\n",
+		   newval->string, newval->value);
+	bond->params.missed_max = newval->value;
 
 	return 0;
 }
@@ -1132,8 +1309,7 @@ static int bond_option_primary_set(struct bonding *bond,
 
 	bond_for_each_slave(bond, slave, iter) {
 		if (strncmp(slave->dev->name, primary, IFNAMSIZ) == 0) {
-			netdev_dbg(bond->dev, "Setting %s as primary slave\n",
-				   slave->dev->name);
+			slave_dbg(bond->dev, slave->dev, "Setting as primary slave\n");
 			rcu_assign_pointer(bond->primary_slave, slave);
 			strcpy(bond->params.primary, slave->dev->name);
 			bond->force_primary = true;
@@ -1147,11 +1323,10 @@ static int bond_option_primary_set(struct bonding *bond,
 		RCU_INIT_POINTER(bond->primary_slave, NULL);
 		bond_select_active_slave(bond);
 	}
-	strncpy(bond->params.primary, primary, IFNAMSIZ);
-	bond->params.primary[IFNAMSIZ - 1] = 0;
+	strscpy_pad(bond->params.primary, primary, IFNAMSIZ);
 
-	netdev_dbg(bond->dev, "Recording %s as primary, but it has not been enslaved to %s yet\n",
-		   primary, bond->dev->name);
+	netdev_dbg(bond->dev, "Recording %s as primary, but it has not been enslaved yet\n",
+		   primary);
 
 out:
 	unblock_netpoll_tx();
@@ -1189,6 +1364,10 @@ static int bond_option_xmit_hash_policy_set(struct bonding *bond,
 	netdev_dbg(bond->dev, "Setting xmit hash policy to %s (%llu)\n",
 		   newval->string, newval->value);
 	bond->params.xmit_policy = newval->value;
+
+	if (bond->dev->reg_state == NETREG_REGISTERED)
+		if (bond_set_tls_features(bond))
+			netdev_update_features(bond->dev);
 
 	return 0;
 }
@@ -1267,6 +1446,16 @@ static int bond_option_pps_set(struct bonding *bond,
 		bond->params.reciprocal_packets_per_slave =
 			(struct reciprocal_value) { 0 };
 	}
+
+	return 0;
+}
+
+static int bond_option_lacp_active_set(struct bonding *bond,
+				       const struct bond_opt_value *newval)
+{
+	netdev_dbg(bond->dev, "Setting LACP active to %s (%llu)\n",
+		   newval->string, newval->value);
+	bond->params.lacp_active = newval->value;
 
 	return 0;
 }
@@ -1378,12 +1567,12 @@ static int bond_option_slaves_set(struct bonding *bond,
 
 	switch (command[0]) {
 	case '+':
-		netdev_dbg(bond->dev, "Adding slave %s\n", dev->name);
+		slave_dbg(bond->dev, dev, "Enslaving interface\n");
 		ret = bond_enslave(bond->dev, dev, NULL);
 		break;
 
 	case '-':
-		netdev_dbg(bond->dev, "Removing slave %s\n", dev->name);
+		slave_dbg(bond->dev, dev, "Releasing interface\n");
 		ret = bond_release(bond->dev, dev);
 		break;
 
@@ -1437,7 +1626,7 @@ static int bond_option_ad_actor_system_set(struct bonding *bond,
 		mac = (u8 *)&newval->value;
 	}
 
-	if (!is_valid_ether_addr(mac))
+	if (is_multicast_ether_addr(mac))
 		goto err;
 
 	netdev_dbg(bond->dev, "Setting ad_actor_system to %pM\n", mac);
@@ -1447,7 +1636,7 @@ static int bond_option_ad_actor_system_set(struct bonding *bond,
 	return 0;
 
 err:
-	netdev_err(bond->dev, "Invalid MAC address.\n");
+	netdev_err(bond->dev, "Invalid ad_actor_system MAC address.\n");
 	return -EINVAL;
 }
 

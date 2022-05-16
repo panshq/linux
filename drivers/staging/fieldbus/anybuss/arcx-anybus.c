@@ -111,49 +111,29 @@ static void export_reset_1(struct device *dev, bool assert)
  * at a time for now.
  */
 
-static int read_reg_bus(void *context, unsigned int reg,
-			unsigned int *val)
-{
-	void __iomem *base = context;
-
-	*val = readb(base + reg);
-	return 0;
-}
-
-static int write_reg_bus(void *context, unsigned int reg,
-			 unsigned int val)
-{
-	void __iomem *base = context;
-
-	writeb(val, base + reg);
-	return 0;
-}
+static const struct regmap_config arcx_regmap_cfg = {
+	.reg_bits = 16,
+	.val_bits = 8,
+	.max_register = 0x7ff,
+	.use_single_read = true,
+	.use_single_write = true,
+	/*
+	 * single-byte parallel bus accesses are atomic, so don't
+	 * require any synchronization.
+	 */
+	.disable_locking = true,
+};
 
 static struct regmap *create_parallel_regmap(struct platform_device *pdev,
 					     int idx)
 {
-	struct regmap_config regmap_cfg = {
-		.reg_bits = 11,
-		.val_bits = 8,
-		/*
-		 * single-byte parallel bus accesses are atomic, so don't
-		 * require any synchronization.
-		 */
-		.disable_locking = true,
-		.reg_read = read_reg_bus,
-		.reg_write = write_reg_bus,
-	};
-	struct resource *res;
 	void __iomem *base;
 	struct device *dev = &pdev->dev;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, idx + 1);
-	if (resource_size(res) < (1 << regmap_cfg.reg_bits))
-		return ERR_PTR(-EINVAL);
-	base = devm_ioremap_resource(dev, res);
+	base = devm_platform_ioremap_resource(pdev, idx + 1);
 	if (IS_ERR(base))
 		return ERR_CAST(base);
-	return devm_regmap_init(dev, NULL, base, &regmap_cfg);
+	return devm_regmap_init_mmio(dev, base, &arcx_regmap_cfg);
 }
 
 static struct anybuss_host *
@@ -205,7 +185,7 @@ static struct attribute *controller_attributes[] = {
 	NULL,
 };
 
-static struct attribute_group controller_attribute_group = {
+static const struct attribute_group controller_attribute_group = {
 	.attrs = controller_attributes,
 };
 
@@ -226,7 +206,7 @@ static int can_power_is_enabled(struct regulator_dev *rdev)
 	return !(readb(cd->cpld_base + CPLD_STATUS1) & CPLD_STATUS1_CAN_POWER);
 }
 
-static struct regulator_ops can_power_ops = {
+static const struct regulator_ops can_power_ops = {
 	.is_enabled = can_power_is_enabled,
 };
 
@@ -248,7 +228,6 @@ static int controller_probe(struct platform_device *pdev)
 	struct regulator_config config = { };
 	struct regulator_dev *regulator;
 	int err, id;
-	struct resource *res;
 	struct anybuss_host *host;
 	u8 status1, cap;
 
@@ -262,8 +241,7 @@ static int controller_probe(struct platform_device *pdev)
 		return PTR_ERR(cd->reset_gpiod);
 
 	/* CPLD control memory, sits at index 0 */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	cd->cpld_base = devm_ioremap_resource(dev, res);
+	cd->cpld_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(cd->cpld_base)) {
 		dev_err(dev,
 			"failed to map cpld base address\n");
@@ -315,7 +293,7 @@ static int controller_probe(struct platform_device *pdev)
 	regulator = devm_regulator_register(dev, &can_power_desc, &config);
 	if (IS_ERR(regulator)) {
 		err = PTR_ERR(regulator);
-		goto out_reset;
+		goto out_ida;
 	}
 	/* make controller info visible to userspace */
 	cd->class_dev = kzalloc(sizeof(*cd->class_dev), GFP_KERNEL);

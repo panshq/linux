@@ -1,10 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *	w1_ds2408.c - w1 family 29 (DS2408) driver
  *
  * Copyright (c) 2010 Jean-Francois Dagenais <dagenaisj@sonatest.com>
- *
- * This source code is licensed under the GNU General Public License,
- * Version 2. See the file COPYING for more details.
  */
 
 #include <linux/kernel.h>
@@ -338,7 +336,7 @@ static const struct attribute_group *w1_f29_groups[] = {
 	NULL,
 };
 
-static struct w1_family_ops w1_f29_fops = {
+static const struct w1_family_ops w1_f29_fops = {
 	.add_slave      = w1_f29_disable_test_mode,
 	.groups		= w1_f29_groups,
 };

@@ -29,6 +29,7 @@ struct kernel_pkey_params;
  * clear the contents.
  */
 struct key_preparsed_payload {
+	const char	*orig_description; /* Actual or proposed description (maybe NULL) */
 	char		*description;	/* Proposed key description (or NULL) */
 	union key_payload payload;	/* Proposed payload */
 	const void	*data;		/* Raw data */
@@ -69,6 +70,9 @@ struct key_type {
 	 *   function only needs to be called if the real datalen is different
 	 */
 	size_t def_datalen;
+
+	unsigned int flags;
+#define KEY_TYPE_NET_DOMAIN	0x00000001 /* Keys of this type have a net namespace domain */
 
 	/* vet a description */
 	int (*vet_description)(const char *description);
@@ -124,7 +128,7 @@ struct key_type {
 	 *   much is copied into the buffer
 	 * - shouldn't do the copy if the buffer is NULL
 	 */
-	long (*read)(const struct key *key, char __user *buffer, size_t buflen);
+	long (*read)(const struct key *key, char *buffer, size_t buflen);
 
 	/* handle request_key() for this type instead of invoking
 	 * /sbin/request-key (optional)

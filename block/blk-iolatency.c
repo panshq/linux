@@ -76,6 +76,7 @@
 #include <linux/blk-mq.h>
 #include "blk-rq-qos.h"
 #include "blk-stat.h"
+#include "blk-cgroup.h"
 #include "blk.h"
 
 #define DEFAULT_SCALE_COOKIE 1000000U
@@ -591,13 +592,13 @@ static void blkcg_iolatency_done_bio(struct rq_qos *rqos, struct bio *bio)
 	struct rq_wait *rqw;
 	struct iolatency_grp *iolat;
 	u64 window_start;
-	u64 now = ktime_to_ns(ktime_get());
+	u64 now;
 	bool issue_as_root = bio_issue_as_root_blkg(bio);
 	bool enabled = false;
 	int inflight = 0;
 
 	blkg = bio->bi_blkg;
-	if (!blkg || !bio_flagged(bio, BIO_TRACKED))
+	if (!blkg || !bio_flagged(bio, BIO_QOS_THROTTLED))
 		return;
 
 	iolat = blkg_to_lat(bio->bi_blkg);
@@ -608,6 +609,7 @@ static void blkcg_iolatency_done_bio(struct rq_qos *rqos, struct bio *bio)
 	if (!enabled)
 		return;
 
+	now = ktime_to_ns(ktime_get());
 	while (blkg && blkg->parent) {
 		iolat = blkg_to_lat(blkg);
 		if (!iolat) {
@@ -618,40 +620,22 @@ static void blkcg_iolatency_done_bio(struct rq_qos *rqos, struct bio *bio)
 
 		inflight = atomic_dec_return(&rqw->inflight);
 		WARN_ON_ONCE(inflight < 0);
-		if (iolat->min_lat_nsec == 0)
-			goto next;
-		iolatency_record_time(iolat, &bio->bi_issue, now,
-				      issue_as_root);
-		window_start = atomic64_read(&iolat->window_start);
-		if (now > window_start &&
-		    (now - window_start) >= iolat->cur_win_nsec) {
-			if (atomic64_cmpxchg(&iolat->window_start,
-					window_start, now) == window_start)
-				iolatency_check_latencies(iolat, now);
+		/*
+		 * If bi_status is BLK_STS_AGAIN, the bio wasn't actually
+		 * submitted, so do not account for it.
+		 */
+		if (iolat->min_lat_nsec && bio->bi_status != BLK_STS_AGAIN) {
+			iolatency_record_time(iolat, &bio->bi_issue, now,
+					      issue_as_root);
+			window_start = atomic64_read(&iolat->window_start);
+			if (now > window_start &&
+			    (now - window_start) >= iolat->cur_win_nsec) {
+				if (atomic64_cmpxchg(&iolat->window_start,
+					     window_start, now) == window_start)
+					iolatency_check_latencies(iolat, now);
+			}
 		}
-next:
 		wake_up(&rqw->wait);
-		blkg = blkg->parent;
-	}
-}
-
-static void blkcg_iolatency_cleanup(struct rq_qos *rqos, struct bio *bio)
-{
-	struct blkcg_gq *blkg;
-
-	blkg = bio->bi_blkg;
-	while (blkg && blkg->parent) {
-		struct rq_wait *rqw;
-		struct iolatency_grp *iolat;
-
-		iolat = blkg_to_lat(blkg);
-		if (!iolat)
-			goto next;
-
-		rqw = &iolat->rq_wait;
-		atomic_dec(&rqw->inflight);
-		wake_up(&rqw->wait);
-next:
 		blkg = blkg->parent;
 	}
 }
@@ -667,7 +651,6 @@ static void blkcg_iolatency_exit(struct rq_qos *rqos)
 
 static struct rq_qos_ops blkcg_iolatency_ops = {
 	.throttle = blkcg_iolatency_throttle,
-	.cleanup = blkcg_iolatency_cleanup,
 	.done_bio = blkcg_iolatency_done_bio,
 	.exit = blkcg_iolatency_exit,
 };
@@ -744,7 +727,7 @@ int blk_iolatency_init(struct request_queue *q)
 		return -ENOMEM;
 
 	rqos = &blkiolat->rqos;
-	rqos->id = RQ_QOS_CGROUP;
+	rqos->id = RQ_QOS_LATENCY;
 	rqos->ops = &blkcg_iolatency_ops;
 	rqos->q = q;
 
@@ -778,8 +761,10 @@ static int iolatency_set_min_lat_nsec(struct blkcg_gq *blkg, u64 val)
 
 	if (!oldval && val)
 		return 1;
-	if (oldval && !val)
+	if (oldval && !val) {
+		blkcg_clear_delay(blkg);
 		return -1;
+	}
 	return 0;
 }
 
@@ -849,7 +834,11 @@ static ssize_t iolatency_set_limit(struct kernfs_open_file *of, char *buf,
 
 	enable = iolatency_set_min_lat_nsec(blkg, lat_val);
 	if (enable) {
-		WARN_ON_ONCE(!blk_get_queue(blkg->q));
+		if (!blk_get_queue(blkg->q)) {
+			ret = -ENODEV;
+			goto out;
+		}
+
 		blkg_get(blkg);
 	}
 
@@ -902,8 +891,7 @@ static int iolatency_print_limit(struct seq_file *sf, void *v)
 	return 0;
 }
 
-static size_t iolatency_ssd_stat(struct iolatency_grp *iolat, char *buf,
-				 size_t size)
+static bool iolatency_ssd_stat(struct iolatency_grp *iolat, struct seq_file *s)
 {
 	struct latency_stat stat;
 	int cpu;
@@ -918,41 +906,47 @@ static size_t iolatency_ssd_stat(struct iolatency_grp *iolat, char *buf,
 	preempt_enable();
 
 	if (iolat->rq_depth.max_depth == UINT_MAX)
-		return scnprintf(buf, size, " missed=%llu total=%llu depth=max",
-				 (unsigned long long)stat.ps.missed,
-				 (unsigned long long)stat.ps.total);
-	return scnprintf(buf, size, " missed=%llu total=%llu depth=%u",
-			 (unsigned long long)stat.ps.missed,
-			 (unsigned long long)stat.ps.total,
-			 iolat->rq_depth.max_depth);
+		seq_printf(s, " missed=%llu total=%llu depth=max",
+			(unsigned long long)stat.ps.missed,
+			(unsigned long long)stat.ps.total);
+	else
+		seq_printf(s, " missed=%llu total=%llu depth=%u",
+			(unsigned long long)stat.ps.missed,
+			(unsigned long long)stat.ps.total,
+			iolat->rq_depth.max_depth);
+	return true;
 }
 
-static size_t iolatency_pd_stat(struct blkg_policy_data *pd, char *buf,
-				size_t size)
+static bool iolatency_pd_stat(struct blkg_policy_data *pd, struct seq_file *s)
 {
 	struct iolatency_grp *iolat = pd_to_lat(pd);
 	unsigned long long avg_lat;
 	unsigned long long cur_win;
 
+	if (!blkcg_debug_stats)
+		return false;
+
 	if (iolat->ssd)
-		return iolatency_ssd_stat(iolat, buf, size);
+		return iolatency_ssd_stat(iolat, s);
 
 	avg_lat = div64_u64(iolat->lat_avg, NSEC_PER_USEC);
 	cur_win = div64_u64(iolat->cur_win_nsec, NSEC_PER_MSEC);
 	if (iolat->rq_depth.max_depth == UINT_MAX)
-		return scnprintf(buf, size, " depth=max avg_lat=%llu win=%llu",
-				 avg_lat, cur_win);
-
-	return scnprintf(buf, size, " depth=%u avg_lat=%llu win=%llu",
-			 iolat->rq_depth.max_depth, avg_lat, cur_win);
+		seq_printf(s, " depth=max avg_lat=%llu win=%llu",
+			avg_lat, cur_win);
+	else
+		seq_printf(s, " depth=%u avg_lat=%llu win=%llu",
+			iolat->rq_depth.max_depth, avg_lat, cur_win);
+	return true;
 }
 
-
-static struct blkg_policy_data *iolatency_pd_alloc(gfp_t gfp, int node)
+static struct blkg_policy_data *iolatency_pd_alloc(gfp_t gfp,
+						   struct request_queue *q,
+						   struct blkcg *blkcg)
 {
 	struct iolatency_grp *iolat;
 
-	iolat = kzalloc_node(sizeof(*iolat), gfp, node);
+	iolat = kzalloc_node(sizeof(*iolat), gfp, q->node);
 	if (!iolat)
 		return NULL;
 	iolat->stats = __alloc_percpu_gfp(sizeof(struct latency_stat),
@@ -1057,7 +1051,7 @@ static int __init iolatency_init(void)
 
 static void __exit iolatency_exit(void)
 {
-	return blkcg_policy_unregister(&blkcg_policy_iolatency);
+	blkcg_policy_unregister(&blkcg_policy_iolatency);
 }
 
 module_init(iolatency_init);

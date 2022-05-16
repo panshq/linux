@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/mach-pxa/poodle.c
  *
@@ -5,10 +6,6 @@
  *
  * Based on:
  *  linux/arch/arm/mach-pxa/lubbock.c Author:	Nicolas Pitre
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  *
  * Change Log
  *  12-Dec-2002 Sharp Corporation for Poodle
@@ -200,6 +197,14 @@ static struct pxa2xx_spi_controller poodle_spi_info = {
 	.num_chipselect	= 1,
 };
 
+static struct gpiod_lookup_table poodle_spi_gpio_table = {
+	.dev_id = "pxa2xx-spi.1",
+	.table = {
+		GPIO_LOOKUP_IDX("gpio-pxa", POODLE_GPIO_TP_CS, "cs", 0, GPIO_ACTIVE_LOW),
+		{ },
+	},
+};
+
 static struct ads7846_platform_data poodle_ads7846_info = {
 	.model			= 7846,
 	.vref_delay_usecs	= 100,
@@ -208,23 +213,19 @@ static struct ads7846_platform_data poodle_ads7846_info = {
 	.gpio_pendown		= POODLE_GPIO_TP_INT,
 };
 
-static struct pxa2xx_spi_chip poodle_ads7846_chip = {
-	.gpio_cs		= POODLE_GPIO_TP_CS,
-};
-
 static struct spi_board_info poodle_spi_devices[] = {
 	{
 		.modalias	= "ads7846",
 		.max_speed_hz	= 10000,
 		.bus_num	= 1,
 		.platform_data	= &poodle_ads7846_info,
-		.controller_data= &poodle_ads7846_chip,
 		.irq		= PXA_GPIO_TO_IRQ(POODLE_GPIO_TP_INT),
 	},
 };
 
 static void __init poodle_init_spi(void)
 {
+	gpiod_add_lookup_table(&poodle_spi_gpio_table);
 	pxa2xx_set_spi_info(1, &poodle_spi_info);
 	spi_register_board_info(ARRAY_AND_SIZE(poodle_spi_devices));
 }

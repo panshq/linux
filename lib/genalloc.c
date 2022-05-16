@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Basic general purpose allocator for managing special purpose
  * memory, for example, memory that is not managed by the regular
@@ -23,9 +24,6 @@
  * CONFIG_ARCH_HAVE_NMI_SAFE_CMPXCHG.
  *
  * Copyright 2005 (C) Jes Sorensen <jes@trained-monkey.org>
- *
- * This source code is licensed under the GNU General Public License,
- * Version 2.  See the file COPYING for more details.
  */
 
 #include <linux/slab.h>
@@ -83,14 +81,15 @@ static int clear_bits_ll(unsigned long *addr, unsigned long mask_to_clear)
  * users set the same bit, one user will return remain bits, otherwise
  * return 0.
  */
-static int bitmap_set_ll(unsigned long *map, int start, int nr)
+static unsigned long
+bitmap_set_ll(unsigned long *map, unsigned long start, unsigned long nr)
 {
 	unsigned long *p = map + BIT_WORD(start);
-	const int size = start + nr;
+	const unsigned long size = start + nr;
 	int bits_to_set = BITS_PER_LONG - (start % BITS_PER_LONG);
 	unsigned long mask_to_set = BITMAP_FIRST_WORD_MASK(start);
 
-	while (nr - bits_to_set >= 0) {
+	while (nr >= bits_to_set) {
 		if (set_bits_ll(p, mask_to_set))
 			return nr;
 		nr -= bits_to_set;
@@ -118,14 +117,15 @@ static int bitmap_set_ll(unsigned long *map, int start, int nr)
  * users clear the same bit, one user will return remain bits,
  * otherwise return 0.
  */
-static int bitmap_clear_ll(unsigned long *map, int start, int nr)
+static unsigned long
+bitmap_clear_ll(unsigned long *map, unsigned long start, unsigned long nr)
 {
 	unsigned long *p = map + BIT_WORD(start);
-	const int size = start + nr;
+	const unsigned long size = start + nr;
 	int bits_to_clear = BITS_PER_LONG - (start % BITS_PER_LONG);
 	unsigned long mask_to_clear = BITMAP_FIRST_WORD_MASK(start);
 
-	while (nr - bits_to_clear >= 0) {
+	while (nr >= bits_to_clear) {
 		if (clear_bits_ll(p, mask_to_clear))
 			return nr;
 		nr -= bits_to_clear;
@@ -185,8 +185,8 @@ int gen_pool_add_owner(struct gen_pool *pool, unsigned long virt, phys_addr_t ph
 		 size_t size, int nid, void *owner)
 {
 	struct gen_pool_chunk *chunk;
-	int nbits = size >> pool->min_alloc_order;
-	int nbytes = sizeof(struct gen_pool_chunk) +
+	unsigned long nbits = size >> pool->min_alloc_order;
+	unsigned long nbytes = sizeof(struct gen_pool_chunk) +
 				BITS_TO_LONGS(nbits) * sizeof(long);
 
 	chunk = vzalloc_node(nbytes, nid);
@@ -244,14 +244,14 @@ void gen_pool_destroy(struct gen_pool *pool)
 	struct list_head *_chunk, *_next_chunk;
 	struct gen_pool_chunk *chunk;
 	int order = pool->min_alloc_order;
-	int bit, end_bit;
+	unsigned long bit, end_bit;
 
 	list_for_each_safe(_chunk, _next_chunk, &pool->chunks) {
 		chunk = list_entry(_chunk, struct gen_pool_chunk, next_chunk);
 		list_del(&chunk->next_chunk);
 
 		end_bit = chunk_size(chunk) >> order;
-		bit = find_next_bit(chunk->bits, end_bit, 0);
+		bit = find_first_bit(chunk->bits, end_bit);
 		BUG_ON(bit < end_bit);
 
 		vfree(chunk);
@@ -280,7 +280,7 @@ unsigned long gen_pool_alloc_algo_owner(struct gen_pool *pool, size_t size,
 	struct gen_pool_chunk *chunk;
 	unsigned long addr = 0;
 	int order = pool->min_alloc_order;
-	int nbits, start_bit, end_bit, remain;
+	unsigned long nbits, start_bit, end_bit, remain;
 
 #ifndef CONFIG_ARCH_HAVE_NMI_SAFE_CMPXCHG
 	BUG_ON(in_nmi());
@@ -329,21 +329,45 @@ EXPORT_SYMBOL(gen_pool_alloc_algo_owner);
  * gen_pool_dma_alloc - allocate special memory from the pool for DMA usage
  * @pool: pool to allocate from
  * @size: number of bytes to allocate from the pool
- * @dma: dma-view physical address return value.  Use NULL if unneeded.
+ * @dma: dma-view physical address return value.  Use %NULL if unneeded.
  *
  * Allocate the requested number of bytes from the specified pool.
  * Uses the pool allocation function (with first-fit algorithm by default).
  * Can not be used in NMI handler on architectures without
  * NMI-safe cmpxchg implementation.
+ *
+ * Return: virtual address of the allocated memory, or %NULL on failure
  */
 void *gen_pool_dma_alloc(struct gen_pool *pool, size_t size, dma_addr_t *dma)
+{
+	return gen_pool_dma_alloc_algo(pool, size, dma, pool->algo, pool->data);
+}
+EXPORT_SYMBOL(gen_pool_dma_alloc);
+
+/**
+ * gen_pool_dma_alloc_algo - allocate special memory from the pool for DMA
+ * usage with the given pool algorithm
+ * @pool: pool to allocate from
+ * @size: number of bytes to allocate from the pool
+ * @dma: DMA-view physical address return value. Use %NULL if unneeded.
+ * @algo: algorithm passed from caller
+ * @data: data passed to algorithm
+ *
+ * Allocate the requested number of bytes from the specified pool. Uses the
+ * given pool allocation function. Can not be used in NMI handler on
+ * architectures without NMI-safe cmpxchg implementation.
+ *
+ * Return: virtual address of the allocated memory, or %NULL on failure
+ */
+void *gen_pool_dma_alloc_algo(struct gen_pool *pool, size_t size,
+		dma_addr_t *dma, genpool_algo_t algo, void *data)
 {
 	unsigned long vaddr;
 
 	if (!pool)
 		return NULL;
 
-	vaddr = gen_pool_alloc(pool, size);
+	vaddr = gen_pool_alloc_algo(pool, size, algo, data);
 	if (!vaddr)
 		return NULL;
 
@@ -352,10 +376,105 @@ void *gen_pool_dma_alloc(struct gen_pool *pool, size_t size, dma_addr_t *dma)
 
 	return (void *)vaddr;
 }
-EXPORT_SYMBOL(gen_pool_dma_alloc);
+EXPORT_SYMBOL(gen_pool_dma_alloc_algo);
 
 /**
- * gen_pool_free - free allocated special memory back to the pool
+ * gen_pool_dma_alloc_align - allocate special memory from the pool for DMA
+ * usage with the given alignment
+ * @pool: pool to allocate from
+ * @size: number of bytes to allocate from the pool
+ * @dma: DMA-view physical address return value. Use %NULL if unneeded.
+ * @align: alignment in bytes for starting address
+ *
+ * Allocate the requested number bytes from the specified pool, with the given
+ * alignment restriction. Can not be used in NMI handler on architectures
+ * without NMI-safe cmpxchg implementation.
+ *
+ * Return: virtual address of the allocated memory, or %NULL on failure
+ */
+void *gen_pool_dma_alloc_align(struct gen_pool *pool, size_t size,
+		dma_addr_t *dma, int align)
+{
+	struct genpool_data_align data = { .align = align };
+
+	return gen_pool_dma_alloc_algo(pool, size, dma,
+			gen_pool_first_fit_align, &data);
+}
+EXPORT_SYMBOL(gen_pool_dma_alloc_align);
+
+/**
+ * gen_pool_dma_zalloc - allocate special zeroed memory from the pool for
+ * DMA usage
+ * @pool: pool to allocate from
+ * @size: number of bytes to allocate from the pool
+ * @dma: dma-view physical address return value.  Use %NULL if unneeded.
+ *
+ * Allocate the requested number of zeroed bytes from the specified pool.
+ * Uses the pool allocation function (with first-fit algorithm by default).
+ * Can not be used in NMI handler on architectures without
+ * NMI-safe cmpxchg implementation.
+ *
+ * Return: virtual address of the allocated zeroed memory, or %NULL on failure
+ */
+void *gen_pool_dma_zalloc(struct gen_pool *pool, size_t size, dma_addr_t *dma)
+{
+	return gen_pool_dma_zalloc_algo(pool, size, dma, pool->algo, pool->data);
+}
+EXPORT_SYMBOL(gen_pool_dma_zalloc);
+
+/**
+ * gen_pool_dma_zalloc_algo - allocate special zeroed memory from the pool for
+ * DMA usage with the given pool algorithm
+ * @pool: pool to allocate from
+ * @size: number of bytes to allocate from the pool
+ * @dma: DMA-view physical address return value. Use %NULL if unneeded.
+ * @algo: algorithm passed from caller
+ * @data: data passed to algorithm
+ *
+ * Allocate the requested number of zeroed bytes from the specified pool. Uses
+ * the given pool allocation function. Can not be used in NMI handler on
+ * architectures without NMI-safe cmpxchg implementation.
+ *
+ * Return: virtual address of the allocated zeroed memory, or %NULL on failure
+ */
+void *gen_pool_dma_zalloc_algo(struct gen_pool *pool, size_t size,
+		dma_addr_t *dma, genpool_algo_t algo, void *data)
+{
+	void *vaddr = gen_pool_dma_alloc_algo(pool, size, dma, algo, data);
+
+	if (vaddr)
+		memset(vaddr, 0, size);
+
+	return vaddr;
+}
+EXPORT_SYMBOL(gen_pool_dma_zalloc_algo);
+
+/**
+ * gen_pool_dma_zalloc_align - allocate special zeroed memory from the pool for
+ * DMA usage with the given alignment
+ * @pool: pool to allocate from
+ * @size: number of bytes to allocate from the pool
+ * @dma: DMA-view physical address return value. Use %NULL if unneeded.
+ * @align: alignment in bytes for starting address
+ *
+ * Allocate the requested number of zeroed bytes from the specified pool,
+ * with the given alignment restriction. Can not be used in NMI handler on
+ * architectures without NMI-safe cmpxchg implementation.
+ *
+ * Return: virtual address of the allocated zeroed memory, or %NULL on failure
+ */
+void *gen_pool_dma_zalloc_align(struct gen_pool *pool, size_t size,
+		dma_addr_t *dma, int align)
+{
+	struct genpool_data_align data = { .align = align };
+
+	return gen_pool_dma_zalloc_algo(pool, size, dma,
+			gen_pool_first_fit_align, &data);
+}
+EXPORT_SYMBOL(gen_pool_dma_zalloc_align);
+
+/**
+ * gen_pool_free_owner - free allocated special memory back to the pool
  * @pool: pool to free to
  * @addr: starting address of memory to free back to pool
  * @size: size in bytes of memory to free
@@ -370,7 +489,7 @@ void gen_pool_free_owner(struct gen_pool *pool, unsigned long addr, size_t size,
 {
 	struct gen_pool_chunk *chunk;
 	int order = pool->min_alloc_order;
-	int start_bit, nbits, remain;
+	unsigned long start_bit, nbits, remain;
 
 #ifndef CONFIG_ARCH_HAVE_NMI_SAFE_CMPXCHG
 	BUG_ON(in_nmi());
@@ -423,7 +542,7 @@ void gen_pool_for_each_chunk(struct gen_pool *pool,
 EXPORT_SYMBOL(gen_pool_for_each_chunk);
 
 /**
- * addr_in_gen_pool - checks if an address falls within the range of a pool
+ * gen_pool_has_addr - checks if an address falls within the range of a pool
  * @pool:	the generic memory pool
  * @start:	start address
  * @size:	size of the region
@@ -431,7 +550,7 @@ EXPORT_SYMBOL(gen_pool_for_each_chunk);
  * Check if the range of addresses falls within the specified pool. Returns
  * true if the entire range is contained in the pool and false otherwise.
  */
-bool addr_in_gen_pool(struct gen_pool *pool, unsigned long start,
+bool gen_pool_has_addr(struct gen_pool *pool, unsigned long start,
 			size_t size)
 {
 	bool found = false;
@@ -450,6 +569,7 @@ bool addr_in_gen_pool(struct gen_pool *pool, unsigned long start,
 	rcu_read_unlock();
 	return found;
 }
+EXPORT_SYMBOL(gen_pool_has_addr);
 
 /**
  * gen_pool_avail - get available free space of the pool
@@ -522,6 +642,7 @@ EXPORT_SYMBOL(gen_pool_set_algo);
  * @nr: The number of zeroed bits we're looking for
  * @data: additional data - unused
  * @pool: pool to find the fit region memory from
+ * @start_addr: not used in this function
  */
 unsigned long gen_pool_first_fit(unsigned long *map, unsigned long size,
 		unsigned long start, unsigned int nr, void *data,
@@ -540,6 +661,7 @@ EXPORT_SYMBOL(gen_pool_first_fit);
  * @nr: The number of zeroed bits we're looking for
  * @data: data for alignment
  * @pool: pool to get order from
+ * @start_addr: start addr of alloction chunk
  */
 unsigned long gen_pool_first_fit_align(unsigned long *map, unsigned long size,
 		unsigned long start, unsigned int nr, void *data,
@@ -567,6 +689,7 @@ EXPORT_SYMBOL(gen_pool_first_fit_align);
  * @nr: The number of zeroed bits we're looking for
  * @data: data for alignment
  * @pool: pool to get order from
+ * @start_addr: not used in this function
  */
 unsigned long gen_pool_fixed_alloc(unsigned long *map, unsigned long size,
 		unsigned long start, unsigned int nr, void *data,
@@ -601,6 +724,7 @@ EXPORT_SYMBOL(gen_pool_fixed_alloc);
  * @nr: The number of zeroed bits we're looking for
  * @data: additional data - unused
  * @pool: pool to find the fit region memory from
+ * @start_addr: not used in this function
  */
 unsigned long gen_pool_first_fit_order_align(unsigned long *map,
 		unsigned long size, unsigned long start,
@@ -615,13 +739,14 @@ EXPORT_SYMBOL(gen_pool_first_fit_order_align);
 
 /**
  * gen_pool_best_fit - find the best fitting region of memory
- * macthing the size requirement (no alignment constraint)
+ * matching the size requirement (no alignment constraint)
  * @map: The address to base the search on
  * @size: The bitmap size in bits
  * @start: The bitnumber to start searching at
  * @nr: The number of zeroed bits we're looking for
  * @data: additional data - unused
  * @pool: pool to find the fit region memory from
+ * @start_addr: not used in this function
  *
  * Iterate over the bitmap to find the smallest free region
  * which we can allocate the memory.
@@ -637,7 +762,7 @@ unsigned long gen_pool_best_fit(unsigned long *map, unsigned long size,
 	index = bitmap_find_next_zero_area(map, size, start, nr, 0);
 
 	while (index < size) {
-		int next_bit = find_next_bit(map, size, index + nr);
+		unsigned long next_bit = find_next_bit(map, size, index + nr);
 		if ((next_bit - index) < len) {
 			len = next_bit - index;
 			start_bit = index;

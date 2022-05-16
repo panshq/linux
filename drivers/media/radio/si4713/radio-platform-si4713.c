@@ -63,9 +63,6 @@ static int radio_si4713_querycap(struct file *file, void *priv,
 		sizeof(capability->card));
 	strscpy(capability->bus_info, "platform:radio-si4713",
 		sizeof(capability->bus_info));
-	capability->device_caps = V4L2_CAP_MODULATOR | V4L2_CAP_RDS_OUTPUT;
-	capability->capabilities = capability->device_caps | V4L2_CAP_DEVICE_CAPS;
-
 	return 0;
 }
 
@@ -113,7 +110,7 @@ static long radio_si4713_default(struct file *file, void *p,
 					  ioctl, cmd, arg);
 }
 
-static struct v4l2_ioctl_ops radio_si4713_ioctl_ops = {
+static const struct v4l2_ioctl_ops radio_si4713_ioctl_ops = {
 	.vidioc_querycap	= radio_si4713_querycap,
 	.vidioc_g_modulator	= radio_si4713_g_modulator,
 	.vidioc_s_modulator	= radio_si4713_s_modulator,
@@ -175,6 +172,7 @@ static int radio_si4713_pdriver_probe(struct platform_device *pdev)
 	rsdev->radio_dev.ctrl_handler = sd->ctrl_handler;
 	/* Serialize all access to the si4713 */
 	rsdev->radio_dev.lock = &rsdev->lock;
+	rsdev->radio_dev.device_caps = V4L2_CAP_MODULATOR | V4L2_CAP_RDS_OUTPUT;
 	video_set_drvdata(&rsdev->radio_dev, rsdev);
 	if (video_register_device(&rsdev->radio_dev, VFL_TYPE_RADIO, radio_nr)) {
 		dev_err(&pdev->dev, "Could not register video device.\n");

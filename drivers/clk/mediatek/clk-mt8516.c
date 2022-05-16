@@ -11,8 +11,9 @@
 #include <linux/slab.h>
 #include <linux/mfd/syscon.h>
 
-#include "clk-mtk.h"
 #include "clk-gate.h"
+#include "clk-mtk.h"
+#include "clk-pll.h"
 
 #include <dt-bindings/clock/mt8516-clk.h>
 
@@ -229,11 +230,6 @@ static const char * const nfi2x_pad_parents[] __initconst = {
 static const char * const nfi1x_pad_parents[] __initconst = {
 	"ahb_infra_sel",
 	"nfi1x_ck"
-};
-
-static const char * const ddrphycfg_parents[] __initconst = {
-	"clk26m_ck",
-	"mainpll_d16"
 };
 
 static const char * const usb_78m_parents[] __initconst = {

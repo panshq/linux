@@ -32,7 +32,7 @@
 
 #include "bw_fixed.h"
 #include "../dml/display_mode_lib.h"
-#include "hw/clk_mgr.h"
+
 
 struct dc;
 struct dc_state;
@@ -619,7 +619,7 @@ struct dcn_ip_params {
 };
 extern const struct dcn_ip_params dcn10_ip_defaults;
 
-bool dcn_validate_bandwidth(
+bool dcn10_validate_bandwidth(
 		struct dc *dc,
 		struct dc_state *context,
 		bool fast_validate);

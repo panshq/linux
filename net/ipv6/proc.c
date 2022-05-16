@@ -44,8 +44,8 @@ static int sockstat6_seq_show(struct seq_file *seq, void *v)
 	seq_printf(seq, "RAW6: inuse %d\n",
 		       sock_prot_inuse_get(net, &rawv6_prot));
 	seq_printf(seq, "FRAG6: inuse %u memory %lu\n",
-		   atomic_read(&net->ipv6.frags.rhashtable.nelems),
-		   frag_mem_limit(&net->ipv6.frags));
+		   atomic_read(&net->ipv6.fqdir->rhashtable.nelems),
+		   frag_mem_limit(net->ipv6.fqdir));
 	return 0;
 }
 
@@ -126,6 +126,7 @@ static const struct snmp_mib snmp6_udp6_list[] = {
 	SNMP_MIB_ITEM("Udp6SndbufErrors", UDP_MIB_SNDBUFERRORS),
 	SNMP_MIB_ITEM("Udp6InCsumErrors", UDP_MIB_CSUMERRORS),
 	SNMP_MIB_ITEM("Udp6IgnoredMulti", UDP_MIB_IGNOREDMULTI),
+	SNMP_MIB_ITEM("Udp6MemErrors", UDP_MIB_MEMERRORS),
 	SNMP_MIB_SENTINEL
 };
 
@@ -137,6 +138,7 @@ static const struct snmp_mib snmp6_udplite6_list[] = {
 	SNMP_MIB_ITEM("UdpLite6RcvbufErrors", UDP_MIB_RCVBUFERRORS),
 	SNMP_MIB_ITEM("UdpLite6SndbufErrors", UDP_MIB_SNDBUFERRORS),
 	SNMP_MIB_ITEM("UdpLite6InCsumErrors", UDP_MIB_CSUMERRORS),
+	SNMP_MIB_ITEM("UdpLite6MemErrors", UDP_MIB_MEMERRORS),
 	SNMP_MIB_SENTINEL
 };
 

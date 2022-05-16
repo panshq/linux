@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * several functions that help interpret ARC instructions
  * used for unaligned accesses, kprobes and kgdb
  *
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/types.h>
@@ -342,7 +339,7 @@ void __kprobes disasm_instr(unsigned long addr, struct disasm_state *state,
 
 	case op_LDWX_S:	/* LDWX_S c, [b, u6] */
 		state->x = 1;
-		/* intentional fall-through */
+		fallthrough;
 
 	case op_LDW_S:	/* LDW_S c, [b, u6] */
 		state->zz = 2;
@@ -369,7 +366,7 @@ void __kprobes disasm_instr(unsigned long addr, struct disasm_state *state,
 	case op_SP:	/* LD_S|LDB_S b,[sp,u7], ST_S|STB_S b,[sp,u7] */
 		/* note: we are ignoring possibility of:
 		 * ADD_S, SUB_S, PUSH_S, POP_S as these should not
-		 * cause unaliged exception anyway */
+		 * cause unaligned exception anyway */
 		state->write = BITS(state->words[0], 6, 6);
 		state->zz = BITS(state->words[0], 5, 5);
 		if (state->zz)
@@ -506,7 +503,6 @@ int __kprobes disasm_next_pc(unsigned long pc, struct pt_regs *regs,
 {
 	struct disasm_state instr;
 
-	memset(&instr, 0, sizeof(struct disasm_state));
 	disasm_instr(pc, &instr, 0, regs, cregs);
 
 	*next_pc = pc + instr.instr_len;

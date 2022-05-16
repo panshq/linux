@@ -131,7 +131,7 @@ void * __init prom_early_alloc(unsigned long size)
 		const size_t chunk_size = max(PAGE_SIZE, size);
 
 		/*
-		 * To mimimize the number of allocations, grab at least
+		 * To minimize the number of allocations, grab at least
 		 * PAGE_SIZE of memory (that's an arbitrary choice that's
 		 * fast enough on the platforms we care about while minimizing
 		 * wasted bootmem) and hand off chunks of it to callers.
@@ -216,7 +216,7 @@ static u32 __init olpc_dt_get_board_revision(void)
 	return be32_to_cpu(rev);
 }
 
-int olpc_dt_compatible_match(phandle node, const char *compat)
+static int __init olpc_dt_compatible_match(phandle node, const char *compat)
 {
 	char buf[64], *p;
 	int plen, len;

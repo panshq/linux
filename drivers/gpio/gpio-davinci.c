@@ -237,11 +237,8 @@ static int davinci_gpio_probe(struct platform_device *pdev)
 
 	for (i = 0; i < nirq; i++) {
 		chips->irqs[i] = platform_get_irq(pdev, i);
-		if (chips->irqs[i] < 0) {
-			dev_info(dev, "IRQ not populated, err = %d\n",
-				 chips->irqs[i]);
-			return chips->irqs[i];
-		}
+		if (chips->irqs[i] < 0)
+			return dev_err_probe(dev, chips->irqs[i], "IRQ not populated\n");
 	}
 
 	chips->chip.label = dev_name(dev);
@@ -257,12 +254,8 @@ static int davinci_gpio_probe(struct platform_device *pdev)
 #ifdef CONFIG_OF_GPIO
 	chips->chip.of_gpio_n_cells = 2;
 	chips->chip.parent = dev;
-	chips->chip.of_node = dev->of_node;
-
-	if (of_property_read_bool(dev->of_node, "gpio-ranges")) {
-		chips->chip.request = gpiochip_generic_request;
-		chips->chip.free = gpiochip_generic_free;
-	}
+	chips->chip.request = gpiochip_generic_request;
+	chips->chip.free = gpiochip_generic_free;
 #endif
 	spin_lock_init(&chips->lock);
 
@@ -297,7 +290,7 @@ static int davinci_gpio_probe(struct platform_device *pdev)
 static void gpio_irq_disable(struct irq_data *d)
 {
 	struct davinci_gpio_regs __iomem *g = irq2regs(d);
-	u32 mask = (u32) irq_data_get_irq_handler_data(d);
+	uintptr_t mask = (uintptr_t)irq_data_get_irq_handler_data(d);
 
 	writel_relaxed(mask, &g->clr_falling);
 	writel_relaxed(mask, &g->clr_rising);
@@ -306,7 +299,7 @@ static void gpio_irq_disable(struct irq_data *d)
 static void gpio_irq_enable(struct irq_data *d)
 {
 	struct davinci_gpio_regs __iomem *g = irq2regs(d);
-	u32 mask = (u32) irq_data_get_irq_handler_data(d);
+	uintptr_t mask = (uintptr_t)irq_data_get_irq_handler_data(d);
 	unsigned status = irqd_get_trigger_type(d);
 
 	status &= IRQ_TYPE_EDGE_FALLING | IRQ_TYPE_EDGE_RISING;
@@ -375,8 +368,7 @@ static void gpio_irq_handler(struct irq_desc *desc)
 			 */
 			hw_irq = (bank_num / 2) * 32 + bit;
 
-			generic_handle_irq(
-				irq_find_mapping(d->irq_domain, hw_irq));
+			generic_handle_domain_irq(d->irq_domain, hw_irq);
 		}
 	}
 	chained_irq_exit(irq_desc_get_chip(desc), desc);
@@ -447,7 +439,7 @@ davinci_gpio_irq_map(struct irq_domain *d, unsigned int irq,
 				"davinci_gpio");
 	irq_set_irq_type(irq, IRQ_TYPE_NONE);
 	irq_set_chip_data(irq, (__force void *)g);
-	irq_set_handler_data(irq, (void *)__gpio_mask(hw));
+	irq_set_handler_data(irq, (void *)(uintptr_t)__gpio_mask(hw));
 
 	return 0;
 }
@@ -632,6 +624,7 @@ done:
 
 static const struct of_device_id davinci_gpio_ids[] = {
 	{ .compatible = "ti,keystone-gpio", keystone_gpio_get_irq_chip},
+	{ .compatible = "ti,am654-gpio", keystone_gpio_get_irq_chip},
 	{ .compatible = "ti,dm6441-gpio", davinci_gpio_get_irq_chip},
 	{ /* sentinel */ },
 };

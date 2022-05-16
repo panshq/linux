@@ -27,7 +27,11 @@ static __le32 sctp_gso_make_checksum(struct sk_buff *skb)
 {
 	skb->ip_summed = CHECKSUM_NONE;
 	skb->csum_not_inet = 0;
-	gso_reset_checksum(skb, ~0);
+	/* csum and csum_start in GSO CB may be needed to do the UDP
+	 * checksum when it's a UDP tunneling packet.
+	 */
+	SKB_GSO_CB(skb)->csum = (__force __wsum)~0;
+	SKB_GSO_CB(skb)->csum_start = skb_headroom(skb) + skb->len;
 	return sctp_compute_cksum(skb, skb_transport_offset(skb));
 }
 
@@ -64,7 +68,7 @@ static struct sk_buff *sctp_gso_segment(struct sk_buff *skb,
 		goto out;
 	}
 
-	segs = skb_segment(skb, features | NETIF_F_HW_CSUM | NETIF_F_SG);
+	segs = skb_segment(skb, (features | NETIF_F_HW_CSUM) & ~NETIF_F_SG);
 	if (IS_ERR(segs))
 		goto out;
 
@@ -94,11 +98,6 @@ static const struct net_offload sctp6_offload = {
 	},
 };
 
-static const struct skb_checksum_ops crc32c_csum_ops = {
-	.update  = sctp_csum_update,
-	.combine = sctp_csum_combine,
-};
-
 int __init sctp_offload_init(void)
 {
 	int ret;
@@ -111,7 +110,7 @@ int __init sctp_offload_init(void)
 	if (ret)
 		goto ipv4;
 
-	crc32c_csum_stub = &crc32c_csum_ops;
+	crc32c_csum_stub = &sctp_csum_ops;
 	return ret;
 
 ipv4:

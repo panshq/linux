@@ -46,6 +46,7 @@ int test_vmxcopy()
 	uint64_t aborted = 0;
 
 	SKIP_IF(!have_htm());
+	SKIP_IF(htm_is_synthetic());
 	SKIP_IF(!is_ppc64le());
 
 	fd = mkstemp(tmpfile);
@@ -79,7 +80,7 @@ int test_vmxcopy()
 
 		"5:;"
 		"stxvd2x 40,0,%[vecoutptr];"
-		: [res]"=r"(aborted)
+		: [res]"=&r"(aborted)
 		: [vecinptr]"r"(&vecin),
 		  [vecoutptr]"r"(&vecout),
 		  [map]"r"(a)

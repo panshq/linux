@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause)
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause)
 //
 // This file is provided under a dual BSD/GPLv2 license.  When using or
 // redistributing this file, you may do so under either license.
@@ -11,13 +11,12 @@
 #include <sound/pcm_params.h>
 #include <sound/hdaudio_ext.h>
 #include "../sof-priv.h"
+#include "../sof-audio.h"
 #include "hda.h"
 
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_HDA)
 
 struct hda_pipe_params {
-	u8 host_dma_id;
-	u8 link_dma_id;
 	u32 ch;
 	u32 s_freq;
 	u32 s_fmt;
@@ -25,80 +24,121 @@ struct hda_pipe_params {
 	snd_pcm_format_t format;
 	int link_index;
 	int stream;
-	unsigned int host_bps;
 	unsigned int link_bps;
 };
 
 /*
- * Unlike GP dma, there is a set of stream registers in hda controller
- * to control the link dma channels. Each register controls one link
- * dma channel and the relation is fixed. To make sure FW uses correct
- * link dma channels, host allocates stream registers and sends the
- * corresponding link dma channels to FW to allocate link dma channel
- *
- * FIXME: this API is abused in the sense that tx_num and rx_num are
- * passed as arguments, not returned. We need to find a better way to
- * retrieve the stream tag allocated for the link DMA
+ * This function checks if the host dma channel corresponding
+ * to the link DMA stream_tag argument is assigned to one
+ * of the FEs connected to the BE DAI.
  */
-static int hda_link_dma_get_channels(struct snd_soc_dai *dai,
-				     unsigned int *tx_num,
-				     unsigned int *tx_slot,
-				     unsigned int *rx_num,
-				     unsigned int *rx_slot)
+static bool hda_check_fes(struct snd_soc_pcm_runtime *rtd,
+			  int dir, int stream_tag)
 {
-	struct hdac_bus *bus;
-	struct hdac_ext_stream *stream;
-	struct snd_pcm_substream substream;
-	struct snd_sof_dev *sdev =
-		snd_soc_component_get_drvdata(dai->component);
+	struct snd_pcm_substream *fe_substream;
+	struct hdac_stream *fe_hstream;
+	struct snd_soc_dpcm *dpcm;
 
-	bus = sof_to_bus(sdev);
-
-	memset(&substream, 0, sizeof(substream));
-	if (*tx_num == 1) {
-		substream.stream = SNDRV_PCM_STREAM_PLAYBACK;
-		stream = snd_hdac_ext_stream_assign(bus, &substream,
-						    HDAC_EXT_STREAM_TYPE_LINK);
-		if (!stream) {
-			dev_err(bus->dev, "error: failed to find a free hda ext stream for playback");
-			return -EBUSY;
-		}
-
-		snd_soc_dai_set_dma_data(dai, &substream, stream);
-		*tx_slot = hdac_stream(stream)->stream_tag - 1;
-
-		dev_dbg(bus->dev, "link dma channel %d for playback", *tx_slot);
+	for_each_dpcm_fe(rtd, dir, dpcm) {
+		fe_substream = snd_soc_dpcm_get_substream(dpcm->fe, dir);
+		fe_hstream = fe_substream->runtime->private_data;
+		if (fe_hstream->stream_tag == stream_tag)
+			return true;
 	}
 
-	if (*rx_num == 1) {
-		substream.stream = SNDRV_PCM_STREAM_CAPTURE;
-		stream = snd_hdac_ext_stream_assign(bus, &substream,
-						    HDAC_EXT_STREAM_TYPE_LINK);
-		if (!stream) {
-			dev_err(bus->dev, "error: failed to find a free hda ext stream for capture");
-			return -EBUSY;
-		}
-
-		snd_soc_dai_set_dma_data(dai, &substream, stream);
-		*rx_slot = hdac_stream(stream)->stream_tag - 1;
-
-		dev_dbg(bus->dev, "link dma channel %d for capture", *rx_slot);
-	}
-
-	return 0;
+	return false;
 }
 
-static int hda_link_dma_params(struct hdac_ext_stream *stream,
+static struct hdac_ext_stream *
+	hda_link_stream_assign(struct hdac_bus *bus,
+			       struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
+	struct sof_intel_hda_stream *hda_stream;
+	const struct sof_intel_dsp_desc *chip;
+	struct snd_sof_dev *sdev;
+	struct hdac_ext_stream *res = NULL;
+	struct hdac_stream *hstream = NULL;
+
+	int stream_dir = substream->stream;
+
+	if (!bus->ppcap) {
+		dev_err(bus->dev, "stream type not supported\n");
+		return NULL;
+	}
+
+	spin_lock_irq(&bus->reg_lock);
+	list_for_each_entry(hstream, &bus->stream_list, list) {
+		struct hdac_ext_stream *hext_stream =
+			stream_to_hdac_ext_stream(hstream);
+		if (hstream->direction != substream->stream)
+			continue;
+
+		hda_stream = hstream_to_sof_hda_stream(hext_stream);
+		sdev = hda_stream->sdev;
+		chip = get_chip_info(sdev->pdata);
+
+		/* check if link is available */
+		if (!hext_stream->link_locked) {
+			/*
+			 * choose the first available link for platforms that do not have the
+			 * PROCEN_FMT_QUIRK set.
+			 */
+			if (!(chip->quirks & SOF_INTEL_PROCEN_FMT_QUIRK)) {
+				res = hext_stream;
+				break;
+			}
+
+			if (hstream->opened) {
+				/*
+				 * check if the stream tag matches the stream
+				 * tag of one of the connected FEs
+				 */
+				if (hda_check_fes(rtd, stream_dir,
+						  hstream->stream_tag)) {
+					res = hext_stream;
+					break;
+				}
+			} else {
+				res = hext_stream;
+
+				/*
+				 * This must be a hostless stream.
+				 * So reserve the host DMA channel.
+				 */
+				hda_stream->host_reserved = 1;
+				break;
+			}
+		}
+	}
+
+	if (res) {
+		/*
+		 * Decouple host and link DMA. The decoupled flag
+		 * is updated in snd_hdac_ext_stream_decouple().
+		 */
+		if (!res->decoupled)
+			snd_hdac_ext_stream_decouple_locked(bus, res, true);
+
+		res->link_locked = 1;
+		res->link_substream = substream;
+	}
+	spin_unlock_irq(&bus->reg_lock);
+
+	return res;
+}
+
+static int hda_link_dma_params(struct hdac_ext_stream *hext_stream,
 			       struct hda_pipe_params *params)
 {
-	struct hdac_stream *hstream = &stream->hstream;
+	struct hdac_stream *hstream = &hext_stream->hstream;
 	unsigned char stream_tag = hstream->stream_tag;
 	struct hdac_bus *bus = hstream->bus;
 	struct hdac_ext_link *link;
 	unsigned int format_val;
 
-	snd_hdac_ext_stream_decouple(bus, stream, true);
-	snd_hdac_ext_link_stream_reset(stream);
+	snd_hdac_ext_stream_decouple(bus, hext_stream, true);
+	snd_hdac_ext_link_stream_reset(hext_stream);
 
 	format_val = snd_hdac_calc_stream_format(params->s_freq, params->ch,
 						 params->format,
@@ -107,9 +147,9 @@ static int hda_link_dma_params(struct hdac_ext_stream *stream,
 	dev_dbg(bus->dev, "format_val=%d, rate=%d, ch=%d, format=%d\n",
 		format_val, params->s_freq, params->ch, params->format);
 
-	snd_hdac_ext_link_stream_setup(stream, format_val);
+	snd_hdac_ext_link_stream_setup(hext_stream, format_val);
 
-	if (stream->hstream.direction == SNDRV_PCM_STREAM_PLAYBACK) {
+	if (hext_stream->hstream.direction == SNDRV_PCM_STREAM_PLAYBACK) {
 		list_for_each_entry(link, &bus->hlink_list, list) {
 			if (link->index == params->link_index)
 				snd_hdac_ext_link_set_stream_id(link,
@@ -117,9 +157,24 @@ static int hda_link_dma_params(struct hdac_ext_stream *stream,
 		}
 	}
 
-	stream->link_prepared = 1;
+	hext_stream->link_prepared = 1;
 
 	return 0;
+}
+
+static int hda_link_dai_widget_update(struct sof_intel_hda_stream *hda_stream,
+				      struct snd_soc_dapm_widget *w,
+				      int channel, bool widget_setup)
+{
+	struct snd_sof_dai_config_data data;
+
+	data.dai_data = channel;
+
+	/* set up/free DAI widget and send DAI_CONFIG IPC */
+	if (widget_setup)
+		return hda_ctrl_dai_widget_setup(w, SOF_DAI_CONFIG_FLAGS_2_STEP_STOP, &data);
+
+	return hda_ctrl_dai_widget_free(w, SOF_DAI_CONFIG_FLAGS_NONE, &data);
 }
 
 static int hda_link_hw_params(struct snd_pcm_substream *substream,
@@ -128,37 +183,51 @@ static int hda_link_hw_params(struct snd_pcm_substream *substream,
 {
 	struct hdac_stream *hstream = substream->runtime->private_data;
 	struct hdac_bus *bus = hstream->bus;
-	struct hdac_ext_stream *link_dev;
-	struct snd_soc_pcm_runtime *rtd = snd_pcm_substream_chip(substream);
-	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+	struct hdac_ext_stream *hext_stream;
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
+	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, 0);
 	struct sof_intel_hda_stream *hda_stream;
 	struct hda_pipe_params p_params = {0};
+	struct snd_soc_dapm_widget *w;
 	struct hdac_ext_link *link;
 	int stream_tag;
+	int ret;
 
-	link_dev = snd_soc_dai_get_dma_data(dai, substream);
+	/* get stored dma data if resuming from system suspend */
+	hext_stream = snd_soc_dai_get_dma_data(dai, substream);
+	if (!hext_stream) {
+		hext_stream = hda_link_stream_assign(bus, substream);
+		if (!hext_stream)
+			return -EBUSY;
 
-	hda_stream = container_of(link_dev, struct sof_intel_hda_stream,
-				  hda_stream);
-	hda_stream->hw_params_upon_resume = 0;
+		snd_soc_dai_set_dma_data(dai, substream, (void *)hext_stream);
+	}
+
+	stream_tag = hdac_stream(hext_stream)->stream_tag;
+
+	hda_stream = hstream_to_sof_hda_stream(hext_stream);
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		w = dai->playback_widget;
+	else
+		w = dai->capture_widget;
+
+	/* set up the DAI widget and send the DAI_CONFIG with the new tag */
+	ret = hda_link_dai_widget_update(hda_stream, w, stream_tag - 1, true);
+	if (ret < 0)
+		return ret;
 
 	link = snd_hdac_ext_bus_get_link(bus, codec_dai->component->name);
 	if (!link)
 		return -EINVAL;
 
-	stream_tag = hdac_stream(link_dev)->stream_tag;
-
-	/* set the stream tag in the codec dai dma params  */
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
-		snd_soc_dai_set_tdm_slot(codec_dai, stream_tag, 0, 0, 0);
-	else
-		snd_soc_dai_set_tdm_slot(codec_dai, 0, stream_tag, 0, 0);
+	/* set the hdac_stream in the codec dai */
+	snd_soc_dai_set_stream(codec_dai, hdac_stream(hext_stream), substream->stream);
 
 	p_params.s_fmt = snd_pcm_format_width(params_format(params));
 	p_params.ch = params_channels(params);
 	p_params.s_freq = params_rate(params);
 	p_params.stream = substream->stream;
-	p_params.link_dma_id = stream_tag - 1;
 	p_params.link_index = link->index;
 	p_params.format = params_format(params);
 
@@ -167,25 +236,20 @@ static int hda_link_hw_params(struct snd_pcm_substream *substream,
 	else
 		p_params.link_bps = codec_dai->driver->capture.sig_bits;
 
-	return hda_link_dma_params(link_dev, &p_params);
+	return hda_link_dma_params(hext_stream, &p_params);
 }
 
 static int hda_link_pcm_prepare(struct snd_pcm_substream *substream,
 				struct snd_soc_dai *dai)
 {
-	struct hdac_ext_stream *link_dev =
+	struct hdac_ext_stream *hext_stream =
 				snd_soc_dai_get_dma_data(dai, substream);
-	struct sof_intel_hda_stream *hda_stream;
 	struct snd_sof_dev *sdev =
 				snd_soc_component_get_drvdata(dai->component);
-	struct snd_soc_pcm_runtime *rtd = snd_pcm_substream_chip(substream);
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
 	int stream = substream->stream;
 
-	hda_stream = container_of(link_dev, struct sof_intel_hda_stream,
-				  hda_stream);
-
-	/* setup hw_params again only if resuming from system suspend */
-	if (!hda_stream->hw_params_upon_resume)
+	if (hext_stream->link_prepared)
 		return 0;
 
 	dev_dbg(sdev->dev, "hda: prepare stream dir %d\n", substream->stream);
@@ -194,33 +258,81 @@ static int hda_link_pcm_prepare(struct snd_pcm_substream *substream,
 				  dai);
 }
 
+static int hda_link_dai_config_pause_push_ipc(struct snd_soc_dapm_widget *w)
+{
+	struct snd_sof_widget *swidget = w->dobj.private;
+	struct snd_soc_component *component = swidget->scomp;
+	struct snd_sof_dev *sdev = snd_soc_component_get_drvdata(component);
+	const struct sof_ipc_tplg_ops *tplg_ops = sdev->ipc->ops->tplg;
+	int ret = 0;
+
+	if (tplg_ops->dai_config) {
+		ret = tplg_ops->dai_config(sdev, swidget, SOF_DAI_CONFIG_FLAGS_PAUSE, NULL);
+		if (ret < 0)
+			dev_err(sdev->dev, "%s: DAI config failed for widget %s\n", __func__,
+				w->name);
+	}
+
+	return ret;
+}
+
 static int hda_link_pcm_trigger(struct snd_pcm_substream *substream,
 				int cmd, struct snd_soc_dai *dai)
 {
-	struct hdac_ext_stream *link_dev =
+	struct hdac_ext_stream *hext_stream =
 				snd_soc_dai_get_dma_data(dai, substream);
+	struct sof_intel_hda_stream *hda_stream;
+	struct snd_soc_pcm_runtime *rtd;
+	struct snd_soc_dapm_widget *w;
+	struct hdac_ext_link *link;
+	struct hdac_stream *hstream;
+	struct hdac_bus *bus;
+	int stream_tag;
 	int ret;
 
-	dev_dbg(dai->dev, "In %s cmd=%d\n", __func__, cmd);
-	switch (cmd) {
-	case SNDRV_PCM_TRIGGER_RESUME:
-		/* set up hw_params */
-		ret = hda_link_pcm_prepare(substream, dai);
-		if (ret < 0) {
-			dev_err(dai->dev,
-				"error: setting up hw_params during resume\n");
-			return ret;
-		}
+	hstream = substream->runtime->private_data;
+	bus = hstream->bus;
+	rtd = asoc_substream_to_rtd(substream);
 
-		/* fallthrough */
+	link = snd_hdac_ext_bus_get_link(bus, asoc_rtd_to_codec(rtd, 0)->component->name);
+	if (!link)
+		return -EINVAL;
+
+	hda_stream = hstream_to_sof_hda_stream(hext_stream);
+
+	dev_dbg(dai->dev, "In %s cmd=%d\n", __func__, cmd);
+
+	w = snd_soc_dai_get_widget(dai, substream->stream);
+
+	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		snd_hdac_ext_link_stream_start(link_dev);
+		snd_hdac_ext_link_stream_start(hext_stream);
 		break;
-	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_STOP:
-		snd_hdac_ext_link_stream_clear(link_dev);
+		snd_hdac_ext_link_stream_clear(hext_stream);
+
+		/*
+		 * free DAI widget during stop/suspend to keep widget use_count's balanced.
+		 */
+		ret = hda_link_dai_widget_update(hda_stream, w, DMA_CHAN_INVALID, false);
+		if (ret < 0)
+			return ret;
+
+		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+			stream_tag = hdac_stream(hext_stream)->stream_tag;
+			snd_hdac_ext_link_clear_stream_id(link, stream_tag);
+		}
+
+		hext_stream->link_prepared = 0;
+		break;
+	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+		snd_hdac_ext_link_stream_clear(hext_stream);
+
+		ret = hda_link_dai_config_pause_push_ipc(w);
+		if (ret < 0)
+			return ret;
 		break;
 	default:
 		return -EINVAL;
@@ -228,62 +340,57 @@ static int hda_link_pcm_trigger(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-/*
- * FIXME: This API is also abused since it's used for two purposes.
- * when the substream argument is NULL this function is used for cleanups
- * that aren't necessarily required, and called explicitly by handling
- * ASoC core structures, which is not recommended.
- * This part will be reworked in follow-up patches.
- */
 static int hda_link_hw_free(struct snd_pcm_substream *substream,
 			    struct snd_soc_dai *dai)
 {
-	const char *name;
 	unsigned int stream_tag;
+	struct sof_intel_hda_stream *hda_stream;
 	struct hdac_bus *bus;
 	struct hdac_ext_link *link;
 	struct hdac_stream *hstream;
-	struct hdac_ext_stream *stream;
 	struct snd_soc_pcm_runtime *rtd;
-	struct hdac_ext_stream *link_dev;
-	struct snd_pcm_substream pcm_substream;
+	struct hdac_ext_stream *hext_stream;
+	struct snd_soc_dapm_widget *w;
+	int ret;
 
-	memset(&pcm_substream, 0, sizeof(pcm_substream));
-	if (substream) {
-		hstream = substream->runtime->private_data;
-		bus = hstream->bus;
-		rtd = snd_pcm_substream_chip(substream);
-		link_dev = snd_soc_dai_get_dma_data(dai, substream);
-		snd_hdac_ext_stream_decouple(bus, link_dev, false);
-		name = rtd->codec_dai->component->name;
-		link = snd_hdac_ext_bus_get_link(bus, name);
-		if (!link)
-			return -EINVAL;
+	hstream = substream->runtime->private_data;
+	bus = hstream->bus;
+	rtd = asoc_substream_to_rtd(substream);
+	hext_stream = snd_soc_dai_get_dma_data(dai, substream);
 
-		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-			stream_tag = hdac_stream(link_dev)->stream_tag;
-			snd_hdac_ext_link_clear_stream_id(link, stream_tag);
-		}
-
-		link_dev->link_prepared = 0;
-	} else {
-		/* release all hda streams when dai link is unloaded */
-		pcm_substream.stream = SNDRV_PCM_STREAM_PLAYBACK;
-		stream = snd_soc_dai_get_dma_data(dai, &pcm_substream);
-		if (stream) {
-			snd_soc_dai_set_dma_data(dai, &pcm_substream, NULL);
-			snd_hdac_ext_stream_release(stream,
-						    HDAC_EXT_STREAM_TYPE_LINK);
-		}
-
-		pcm_substream.stream = SNDRV_PCM_STREAM_CAPTURE;
-		stream = snd_soc_dai_get_dma_data(dai, &pcm_substream);
-		if (stream) {
-			snd_soc_dai_set_dma_data(dai, &pcm_substream, NULL);
-			snd_hdac_ext_stream_release(stream,
-						    HDAC_EXT_STREAM_TYPE_LINK);
-		}
+	if (!hext_stream) {
+		dev_dbg(dai->dev,
+			"%s: hext_stream is not assigned\n", __func__);
+		return -EINVAL;
 	}
+
+	hda_stream = hstream_to_sof_hda_stream(hext_stream);
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		w = dai->playback_widget;
+	else
+		w = dai->capture_widget;
+
+	/* free the link DMA channel in the FW and the DAI widget */
+	ret = hda_link_dai_widget_update(hda_stream, w, DMA_CHAN_INVALID, false);
+	if (ret < 0)
+		return ret;
+
+	link = snd_hdac_ext_bus_get_link(bus, asoc_rtd_to_codec(rtd, 0)->component->name);
+	if (!link)
+		return -EINVAL;
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		stream_tag = hdac_stream(hext_stream)->stream_tag;
+		snd_hdac_ext_link_clear_stream_id(link, stream_tag);
+	}
+
+	snd_soc_dai_set_dma_data(dai, substream, NULL);
+	snd_hdac_ext_stream_release(hext_stream, HDAC_EXT_STREAM_TYPE_LINK);
+	hext_stream->link_prepared = 0;
+
+	/* free the host DMA channel reserved by hostless streams */
+	hda_stream->host_reserved = 0;
 
 	return 0;
 }
@@ -293,9 +400,121 @@ static const struct snd_soc_dai_ops hda_link_dai_ops = {
 	.hw_free = hda_link_hw_free,
 	.trigger = hda_link_pcm_trigger,
 	.prepare = hda_link_pcm_prepare,
-	.get_channel_map = hda_link_dma_get_channels,
 };
+
 #endif
+
+/* only one flag used so far to harden hw_params/hw_free/trigger/prepare */
+struct ssp_dai_dma_data {
+	bool setup;
+};
+
+static int ssp_dai_setup_or_free(struct snd_pcm_substream *substream, struct snd_soc_dai *dai,
+				 bool setup)
+{
+	struct snd_soc_dapm_widget *w;
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		w = dai->playback_widget;
+	else
+		w = dai->capture_widget;
+
+	if (setup)
+		return hda_ctrl_dai_widget_setup(w, SOF_DAI_CONFIG_FLAGS_NONE, NULL);
+
+	return hda_ctrl_dai_widget_free(w, SOF_DAI_CONFIG_FLAGS_NONE, NULL);
+}
+
+static int ssp_dai_startup(struct snd_pcm_substream *substream,
+			   struct snd_soc_dai *dai)
+{
+	struct ssp_dai_dma_data *dma_data;
+
+	dma_data = kzalloc(sizeof(*dma_data), GFP_KERNEL);
+	if (!dma_data)
+		return -ENOMEM;
+
+	snd_soc_dai_set_dma_data(dai, substream, dma_data);
+
+	return 0;
+}
+
+static int ssp_dai_setup(struct snd_pcm_substream *substream,
+			 struct snd_soc_dai *dai,
+			 bool setup)
+{
+	struct ssp_dai_dma_data *dma_data;
+	int ret = 0;
+
+	dma_data = snd_soc_dai_get_dma_data(dai, substream);
+	if (!dma_data) {
+		dev_err(dai->dev, "%s: failed to get dma_data\n", __func__);
+		return -EIO;
+	}
+
+	if (dma_data->setup != setup) {
+		ret = ssp_dai_setup_or_free(substream, dai, setup);
+		if (!ret)
+			dma_data->setup = setup;
+	}
+	return ret;
+}
+
+static int ssp_dai_hw_params(struct snd_pcm_substream *substream,
+			     struct snd_pcm_hw_params *params,
+			     struct snd_soc_dai *dai)
+{
+	/* params are ignored for now */
+	return ssp_dai_setup(substream, dai, true);
+}
+
+static int ssp_dai_prepare(struct snd_pcm_substream *substream,
+			   struct snd_soc_dai *dai)
+{
+	/*
+	 * the SSP will only be reconfigured during resume operations and
+	 * not in case of xruns
+	 */
+	return ssp_dai_setup(substream, dai, true);
+}
+
+static int ssp_dai_trigger(struct snd_pcm_substream *substream,
+			   int cmd, struct snd_soc_dai *dai)
+{
+	if (cmd != SNDRV_PCM_TRIGGER_SUSPEND)
+		return 0;
+
+	return ssp_dai_setup(substream, dai, false);
+}
+
+static int ssp_dai_hw_free(struct snd_pcm_substream *substream,
+			   struct snd_soc_dai *dai)
+{
+	return ssp_dai_setup(substream, dai, false);
+}
+
+static void ssp_dai_shutdown(struct snd_pcm_substream *substream,
+			     struct snd_soc_dai *dai)
+{
+	struct ssp_dai_dma_data *dma_data;
+
+	dma_data = snd_soc_dai_get_dma_data(dai, substream);
+	if (!dma_data) {
+		dev_err(dai->dev, "%s: failed to get dma_data\n", __func__);
+		return;
+	}
+	snd_soc_dai_set_dma_data(dai, substream, NULL);
+	kfree(dma_data);
+}
+
+static const struct snd_soc_dai_ops ssp_dai_ops = {
+	.startup = ssp_dai_startup,
+	.hw_params = ssp_dai_hw_params,
+	.prepare = ssp_dai_prepare,
+	.trigger = ssp_dai_trigger,
+	.hw_free = ssp_dai_hw_free,
+	.shutdown = ssp_dai_shutdown,
+};
 
 /*
  * common dai driver for skl+ platforms.
@@ -305,52 +524,158 @@ static const struct snd_soc_dai_ops hda_link_dai_ops = {
 struct snd_soc_dai_driver skl_dai[] = {
 {
 	.name = "SSP0 Pin",
+	.ops = &ssp_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
 },
 {
 	.name = "SSP1 Pin",
+	.ops = &ssp_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
 },
 {
 	.name = "SSP2 Pin",
+	.ops = &ssp_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
 },
 {
 	.name = "SSP3 Pin",
+	.ops = &ssp_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
 },
 {
 	.name = "SSP4 Pin",
+	.ops = &ssp_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
 },
 {
 	.name = "SSP5 Pin",
+	.ops = &ssp_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
 },
 {
 	.name = "DMIC01 Pin",
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 4,
+	},
 },
 {
 	.name = "DMIC16k Pin",
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 4,
+	},
 },
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_HDA)
 {
 	.name = "iDisp1 Pin",
 	.ops = &hda_link_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
 },
 {
 	.name = "iDisp2 Pin",
 	.ops = &hda_link_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
 },
 {
 	.name = "iDisp3 Pin",
 	.ops = &hda_link_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
+},
+{
+	.name = "iDisp4 Pin",
+	.ops = &hda_link_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
 },
 {
 	.name = "Analog CPU DAI",
 	.ops = &hda_link_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 16,
+	},
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 16,
+	},
 },
 {
 	.name = "Digital CPU DAI",
 	.ops = &hda_link_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 16,
+	},
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 16,
+	},
 },
 {
 	.name = "Alt Analog CPU DAI",
 	.ops = &hda_link_dai_ops,
+	.playback = {
+		.channels_min = 1,
+		.channels_max = 16,
+	},
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 16,
+	},
 },
 #endif
 };

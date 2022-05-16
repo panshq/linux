@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* SANE connection tracking helper
  * (SANE = Scanner Access Now Easy)
  * For documentation about the SANE network protocol see
@@ -11,10 +12,6 @@
  *  (C) 2002-2004 Netfilter Core Team <coreteam@netfilter.org>
  *  (C) 2003,2004 USAGI/WIDE Project <http://www.linux-ipv6.org>
  *  (C) 2003 Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -98,7 +95,10 @@ static int help(struct sk_buff *skb,
 
 	spin_lock_bh(&nf_sane_lock);
 	sb_ptr = skb_header_pointer(skb, dataoff, datalen, sane_buffer);
-	BUG_ON(sb_ptr == NULL);
+	if (!sb_ptr) {
+		spin_unlock_bh(&nf_sane_lock);
+		return NF_ACCEPT;
+	}
 
 	if (dir == IP_CT_DIR_ORIGINAL) {
 		if (datalen != sizeof(struct sane_request))
@@ -156,7 +156,7 @@ static int help(struct sk_buff *skb,
 	nf_ct_dump_tuple(&exp->tuple);
 
 	/* Can't expect this?  Best to drop packet now. */
-	if (nf_ct_expect_related(exp) != 0) {
+	if (nf_ct_expect_related(exp, 0) != 0) {
 		nf_ct_helper_log(skb, ct, "cannot add expectation");
 		ret = NF_DROP;
 	}

@@ -5,8 +5,6 @@
  * Copyright (C) 2005 Dmitry Yusupov
  * Copyright (C) 2005 Alex Aizman
  * maintained by open-iscsi@googlegroups.com
- *
- * See the file COPYING included with this distribution for more details.
  */
 
 #ifndef ISCSI_PROTO_H
@@ -54,7 +52,7 @@ static inline int iscsi_sna_gte(u32 n1, u32 n2)
 }
 
 /*
- * useful common(control and data pathes) macro
+ * useful common(control and data paths) macro
  */
 #define ntoh24(p) (((p)[0] << 16) | ((p)[1] << 8) | ((p)[2]))
 #define hton24(p, v) { \

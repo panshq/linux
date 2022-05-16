@@ -231,6 +231,7 @@ static int au0828_init_isoc(struct au0828_dev *dev, int max_packets,
 	for (i = 0; i < dev->isoc_ctl.num_bufs; i++) {
 		urb = usb_alloc_urb(max_packets, GFP_KERNEL);
 		if (!urb) {
+			au0828_isocdbg("cannot allocate URB\n");
 			au0828_uninit_isoc(dev);
 			return -ENOMEM;
 		}
@@ -239,16 +240,14 @@ static int au0828_init_isoc(struct au0828_dev *dev, int max_packets,
 		dev->isoc_ctl.transfer_buffer[i] = usb_alloc_coherent(dev->usbdev,
 			sb_size, GFP_KERNEL, &urb->transfer_dma);
 		if (!dev->isoc_ctl.transfer_buffer[i]) {
-			printk("unable to allocate %i bytes for transfer buffer %i%s\n",
-					sb_size, i,
-					in_interrupt() ? " while in int" : "");
+			au0828_isocdbg("cannot allocate transfer buffer\n");
 			au0828_uninit_isoc(dev);
 			return -ENOMEM;
 		}
 		memset(dev->isoc_ctl.transfer_buffer[i], 0, sb_size);
 
 		pipe = usb_rcvisocpipe(dev->usbdev,
-				       dev->isoc_in_endpointaddr),
+				       dev->isoc_in_endpointaddr);
 
 		usb_fill_int_urb(urb, dev->usbdev, pipe,
 				 dev->isoc_ctl.transfer_buffer[i], sb_size,
@@ -938,8 +937,8 @@ int au0828_analog_unregister(struct au0828_dev *dev)
 		return 0;
 
 	mutex_lock(&au0828_sysfs_lock);
-	video_unregister_device(&dev->vdev);
-	video_unregister_device(&dev->vbi_dev);
+	vb2_video_unregister_device(&dev->vdev);
+	vb2_video_unregister_device(&dev->vbi_dev);
 	mutex_unlock(&au0828_sysfs_lock);
 
 	v4l2_device_disconnect(&dev->v4l2_dev);
@@ -1042,7 +1041,7 @@ static int au0828_v4l2_close(struct file *filp)
 		dev->streaming_users, dev->users);
 
 	mutex_lock(&dev->lock);
-	if (vdev->vfl_type == VFL_TYPE_GRABBER && dev->vid_timeout_running) {
+	if (vdev->vfl_type == VFL_TYPE_VIDEO && dev->vid_timeout_running) {
 		/* Cancel timeout thread in case they didn't call streamoff */
 		dev->vid_timeout_running = 0;
 		del_timer_sync(&dev->vid_timeout);
@@ -1153,7 +1152,6 @@ static int au0828_set_format(struct au0828_dev *dev, unsigned int cmd,
 	format->fmt.pix.sizeimage = width * height * 2;
 	format->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
 	format->fmt.pix.field = V4L2_FIELD_INTERLACED;
-	format->fmt.pix.priv = 0;
 
 	if (cmd == VIDIOC_TRY_FMT)
 		return 0;
@@ -1182,7 +1180,6 @@ static int au0828_set_format(struct au0828_dev *dev, unsigned int cmd,
 static int vidioc_querycap(struct file *file, void  *priv,
 			   struct v4l2_capability *cap)
 {
-	struct video_device *vdev = video_devdata(file);
 	struct au0828_dev *dev = video_drvdata(file);
 
 	dprintk(1, "%s called std_set %d dev_state %ld\n", __func__,
@@ -1193,16 +1190,10 @@ static int vidioc_querycap(struct file *file, void  *priv,
 	usb_make_path(dev->usbdev, cap->bus_info, sizeof(cap->bus_info));
 
 	/* set the device capabilities */
-	cap->device_caps = V4L2_CAP_AUDIO |
-		V4L2_CAP_READWRITE |
-		V4L2_CAP_STREAMING |
-		V4L2_CAP_TUNER;
-	if (vdev->vfl_type == VFL_TYPE_GRABBER)
-		cap->device_caps |= V4L2_CAP_VIDEO_CAPTURE;
-	else
-		cap->device_caps |= V4L2_CAP_VBI_CAPTURE;
-	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS |
-		V4L2_CAP_VBI_CAPTURE | V4L2_CAP_VIDEO_CAPTURE;
+	cap->capabilities =
+		V4L2_CAP_AUDIO | V4L2_CAP_READWRITE | V4L2_CAP_STREAMING |
+		V4L2_CAP_TUNER | V4L2_CAP_VBI_CAPTURE | V4L2_CAP_VIDEO_CAPTURE |
+		V4L2_CAP_DEVICE_CAPS;
 	return 0;
 }
 
@@ -1214,10 +1205,6 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void  *priv,
 
 	dprintk(1, "%s called\n", __func__);
 
-	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	strscpy(f->description, "Packed YUV2", sizeof(f->description));
-
-	f->flags = 0;
 	f->pixelformat = V4L2_PIX_FMT_UYVY;
 
 	return 0;
@@ -1238,7 +1225,6 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.sizeimage = dev->frame_size;
 	f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M; /* NTSC/PAL */
 	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
-	f->fmt.pix.priv = 0;
 	return 0;
 }
 
@@ -1991,6 +1977,9 @@ int au0828_analog_register(struct au0828_dev *dev,
 	dev->vdev.lock = &dev->lock;
 	dev->vdev.queue = &dev->vb_vidq;
 	dev->vdev.queue->lock = &dev->vb_queue_lock;
+	dev->vdev.device_caps =
+		V4L2_CAP_AUDIO | V4L2_CAP_READWRITE | V4L2_CAP_STREAMING |
+		V4L2_CAP_TUNER | V4L2_CAP_VIDEO_CAPTURE;
 	strscpy(dev->vdev.name, "au0828a video", sizeof(dev->vdev.name));
 
 	/* Setup the VBI device */
@@ -1999,6 +1988,9 @@ int au0828_analog_register(struct au0828_dev *dev,
 	dev->vbi_dev.lock = &dev->lock;
 	dev->vbi_dev.queue = &dev->vb_vbiq;
 	dev->vbi_dev.queue->lock = &dev->vb_vbi_queue_lock;
+	dev->vbi_dev.device_caps =
+		V4L2_CAP_AUDIO | V4L2_CAP_READWRITE | V4L2_CAP_STREAMING |
+		V4L2_CAP_TUNER | V4L2_CAP_VBI_CAPTURE;
 	strscpy(dev->vbi_dev.name, "au0828a vbi", sizeof(dev->vbi_dev.name));
 
 	/* Init entities at the Media Controller */
@@ -2014,12 +2006,11 @@ int au0828_analog_register(struct au0828_dev *dev,
 
 	/* Register the v4l2 device */
 	video_set_drvdata(&dev->vdev, dev);
-	retval = video_register_device(&dev->vdev, VFL_TYPE_GRABBER, -1);
+	retval = video_register_device(&dev->vdev, VFL_TYPE_VIDEO, -1);
 	if (retval != 0) {
 		dprintk(1, "unable to register video device (error = %d).\n",
 			retval);
-		ret = -ENODEV;
-		goto err_reg_vdev;
+		return -ENODEV;
 	}
 
 	/* Register the vbi device */
@@ -2047,10 +2038,7 @@ int au0828_analog_register(struct au0828_dev *dev,
 	return 0;
 
 err_reg_vbi_dev:
-	video_unregister_device(&dev->vdev);
-err_reg_vdev:
-	vb2_queue_release(&dev->vb_vidq);
-	vb2_queue_release(&dev->vb_vbiq);
+	vb2_video_unregister_device(&dev->vdev);
 	return ret;
 }
 

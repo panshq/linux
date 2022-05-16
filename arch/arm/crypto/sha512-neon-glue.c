@@ -1,16 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * sha512-neon-glue.c - accelerated SHA-384/512 for ARM NEON
  *
  * Copyright (C) 2015 Linaro Ltd <ard.biesheuvel@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <crypto/internal/hash.h>
 #include <crypto/internal/simd.h>
-#include <crypto/sha.h>
+#include <crypto/sha2.h>
 #include <crypto/sha512_base.h>
 #include <linux/crypto.h>
 #include <linux/module.h>

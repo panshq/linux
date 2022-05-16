@@ -270,28 +270,31 @@ int sctp_raw_to_bind_addrs(struct sctp_bind_addr *bp, __u8 *raw_addr_list,
 		rawaddr = (union sctp_addr_param *)raw_addr_list;
 
 		af = sctp_get_af_specific(param_type2af(param->type));
-		if (unlikely(!af)) {
+		if (unlikely(!af) ||
+		    !af->from_addr_param(&addr, rawaddr, htons(port), 0)) {
 			retval = -EINVAL;
-			sctp_bind_addr_clean(bp);
-			break;
+			goto out_err;
 		}
 
-		af->from_addr_param(&addr, rawaddr, htons(port), 0);
 		if (sctp_bind_addr_state(bp, &addr) != -1)
 			goto next;
 		retval = sctp_add_bind_addr(bp, &addr, sizeof(addr),
 					    SCTP_ADDR_SRC, gfp);
-		if (retval) {
+		if (retval)
 			/* Can't finish building the list, clean up. */
-			sctp_bind_addr_clean(bp);
-			break;
-		}
+			goto out_err;
 
 next:
 		len = ntohs(param->length);
 		addrs_len -= len;
 		raw_addr_list += len;
 	}
+
+	return retval;
+
+out_err:
+	if (retval)
+		sctp_bind_addr_clean(bp);
 
 	return retval;
 }
@@ -393,24 +396,19 @@ int sctp_bind_addr_state(const struct sctp_bind_addr *bp,
 {
 	struct sctp_sockaddr_entry *laddr;
 	struct sctp_af *af;
-	int state = -1;
 
 	af = sctp_get_af_specific(addr->sa.sa_family);
 	if (unlikely(!af))
-		return state;
+		return -1;
 
-	rcu_read_lock();
 	list_for_each_entry_rcu(laddr, &bp->address_list, list) {
 		if (!laddr->valid)
 			continue;
-		if (af->cmp_addr(&laddr->a, addr)) {
-			state = laddr->state;
-			break;
-		}
+		if (af->cmp_addr(&laddr->a, addr))
+			return laddr->state;
 	}
-	rcu_read_unlock();
 
-	return state;
+	return -1;
 }
 
 /* Find the first address in the bind address list that is not present in
@@ -466,6 +464,7 @@ static int sctp_copy_one_addr(struct net *net, struct sctp_bind_addr *dest,
 		 * well as the remote peer.
 		 */
 		if ((((AF_INET == addr->sa.sa_family) &&
+		      (flags & SCTP_ADDR4_ALLOWED) &&
 		      (flags & SCTP_ADDR4_PEERSUPP))) ||
 		    (((AF_INET6 == addr->sa.sa_family) &&
 		      (flags & SCTP_ADDR6_ALLOWED) &&
@@ -509,7 +508,7 @@ int sctp_in_scope(struct net *net, const union sctp_addr *addr,
 		return 0;
 	/*
 	 * For INIT and INIT-ACK address list, let L be the level of
-	 * of requested destination address, sender and receiver
+	 * requested destination address, sender and receiver
 	 * SHOULD include all of its addresses with level greater
 	 * than or equal to L.
 	 *

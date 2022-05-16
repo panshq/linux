@@ -5,7 +5,7 @@
  * Copyright (C) 2013 Antti Palosaari <crope@iki.fi>
  *
  * GNU Radio plugin "gr-kernel" for device usage will be on:
- * http://git.linuxtv.org/anttip/gr-kernel.git
+ * https://git.linuxtv.org/anttip/gr-kernel.git
  */
 
 #include "rtl2832_sdr.h"
@@ -81,11 +81,9 @@ struct rtl2832_sdr_format {
 
 static struct rtl2832_sdr_format formats[] = {
 	{
-		.name		= "Complex U8",
 		.pixelformat	= V4L2_SDR_FMT_CU8,
 		.buffersize	= BULK_BUFFER_SIZE,
 	}, {
-		.name		= "Complex U16LE (emulated)",
 		.pixelformat	= V4L2_SDR_FMT_CU16LE,
 		.buffersize	= BULK_BUFFER_SIZE * 2,
 	},
@@ -378,8 +376,11 @@ static int rtl2832_sdr_alloc_urbs(struct rtl2832_sdr_dev *dev)
 		dev_dbg(&pdev->dev, "alloc urb=%d\n", i);
 		dev->urb_list[i] = usb_alloc_urb(0, GFP_KERNEL);
 		if (!dev->urb_list[i]) {
-			for (j = 0; j < i; j++)
+			for (j = 0; j < i; j++) {
 				usb_free_urb(dev->urb_list[j]);
+				dev->urb_list[j] = NULL;
+			}
+			dev->urbs_initialized = 0;
 			return -ENOMEM;
 		}
 		usb_fill_bulk_urb(dev->urb_list[i],
@@ -428,9 +429,6 @@ static int rtl2832_sdr_querycap(struct file *file, void *fh,
 	strscpy(cap->driver, KBUILD_MODNAME, sizeof(cap->driver));
 	strscpy(cap->card, dev->vdev.name, sizeof(cap->card));
 	usb_make_path(dev->udev, cap->bus_info, sizeof(cap->bus_info));
-	cap->device_caps = V4L2_CAP_SDR_CAPTURE | V4L2_CAP_STREAMING |
-			V4L2_CAP_READWRITE | V4L2_CAP_TUNER;
-	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
 	return 0;
 }
 
@@ -1119,7 +1117,6 @@ static int rtl2832_sdr_enum_fmt_sdr_cap(struct file *file, void *priv,
 	if (f->index >= dev->num_formats)
 		return -EINVAL;
 
-	strscpy(f->description, formats[f->index].name, sizeof(f->description));
 	f->pixelformat = formats[f->index].pixelformat;
 
 	return 0;
@@ -1135,8 +1132,6 @@ static int rtl2832_sdr_g_fmt_sdr_cap(struct file *file, void *priv,
 
 	f->fmt.sdr.pixelformat = dev->pixelformat;
 	f->fmt.sdr.buffersize = dev->buffersize;
-
-	memset(f->fmt.sdr.reserved, 0, sizeof(f->fmt.sdr.reserved));
 
 	return 0;
 }
@@ -1155,7 +1150,6 @@ static int rtl2832_sdr_s_fmt_sdr_cap(struct file *file, void *priv,
 	if (vb2_is_busy(q))
 		return -EBUSY;
 
-	memset(f->fmt.sdr.reserved, 0, sizeof(f->fmt.sdr.reserved));
 	for (i = 0; i < dev->num_formats; i++) {
 		if (formats[i].pixelformat == f->fmt.sdr.pixelformat) {
 			dev->pixelformat = formats[i].pixelformat;
@@ -1183,7 +1177,6 @@ static int rtl2832_sdr_try_fmt_sdr_cap(struct file *file, void *priv,
 	dev_dbg(&pdev->dev, "pixelformat fourcc %4.4s\n",
 		(char *)&f->fmt.sdr.pixelformat);
 
-	memset(f->fmt.sdr.reserved, 0, sizeof(f->fmt.sdr.reserved));
 	for (i = 0; i < dev->num_formats; i++) {
 		if (formats[i].pixelformat == f->fmt.sdr.pixelformat) {
 			f->fmt.sdr.buffersize = formats[i].buffersize;
@@ -1242,6 +1235,8 @@ static struct video_device rtl2832_sdr_template = {
 	.release                  = video_device_release_empty,
 	.fops                     = &rtl2832_sdr_fops,
 	.ioctl_ops                = &rtl2832_sdr_ioctl_ops,
+	.device_caps		  = V4L2_CAP_SDR_CAPTURE | V4L2_CAP_STREAMING |
+				    V4L2_CAP_READWRITE | V4L2_CAP_TUNER,
 };
 
 static int rtl2832_sdr_s_ctrl(struct v4l2_ctrl *ctrl)
@@ -1415,6 +1410,7 @@ static int rtl2832_sdr_probe(struct platform_device *pdev)
 	default:
 		v4l2_ctrl_handler_init(&dev->hdl, 0);
 		dev_err(&pdev->dev, "Unsupported tuner\n");
+		ret = -ENODEV;
 		goto err_v4l2_ctrl_handler_free;
 	}
 	if (dev->hdl.error) {

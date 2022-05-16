@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Toshiba TC6387XB support
  * Copyright (c) 2005 Ian Molton
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  * This file contains TC6387XB base support.
- *
  */
 
 #include <linux/module.h>
@@ -29,7 +25,7 @@ struct tc6387xb {
 	struct resource rscr;
 };
 
-static struct resource tc6387xb_mmc_resources[] = {
+static const struct resource tc6387xb_mmc_resources[] = {
 	{
 		.start = 0x800,
 		.end   = 0x9ff,

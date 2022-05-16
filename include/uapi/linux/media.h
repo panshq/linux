@@ -127,6 +127,7 @@ struct media_device_info {
 #define MEDIA_ENT_F_PROC_VIDEO_STATISTICS	(MEDIA_ENT_F_BASE + 0x4006)
 #define MEDIA_ENT_F_PROC_VIDEO_ENCODER		(MEDIA_ENT_F_BASE + 0x4007)
 #define MEDIA_ENT_F_PROC_VIDEO_DECODER		(MEDIA_ENT_F_BASE + 0x4008)
+#define MEDIA_ENT_F_PROC_VIDEO_ISP		(MEDIA_ENT_F_BASE + 0x4009)
 
 /*
  * Switch and bridge entity functions
@@ -146,7 +147,7 @@ struct media_device_info {
 #define MEDIA_ENT_FL_CONNECTOR			(1 << 1)
 
 /* OR with the entity id value to find the next entity */
-#define MEDIA_ENT_ID_FLAG_NEXT			(1 << 31)
+#define MEDIA_ENT_ID_FLAG_NEXT			(1U << 31)
 
 struct media_entity_desc {
 	__u32 id;

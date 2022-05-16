@@ -1,8 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* The industrial I/O callback buffer
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -56,6 +53,11 @@ struct iio_cb_buffer *iio_channel_get_all_cb(struct device *dev,
 	int ret;
 	struct iio_cb_buffer *cb_buff;
 	struct iio_channel *chan;
+
+	if (!cb) {
+		dev_err(dev, "Invalid arguments: A callback must be provided!\n");
+		return ERR_PTR(-EINVAL);
+	}
 
 	cb_buff = kzalloc(sizeof(*cb_buff), GFP_KERNEL);
 	if (cb_buff == NULL)

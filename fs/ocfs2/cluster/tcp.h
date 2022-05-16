@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* -*- mode: c; c-basic-offset: 8; -*-
- * vim: noexpandtab sw=8 ts=8 sts=0:
- *
+/*
  * tcp.h
  *
  * Function prototypes
@@ -32,7 +30,7 @@ struct o2net_msg
 	__be32 status;
 	__be32 key;
 	__be32 msg_num;
-	__u8  buf[0];
+	__u8  buf[];
 };
 
 typedef int (o2net_msg_handler_func)(struct o2net_msg *msg, u32 len, void *data,
@@ -109,16 +107,15 @@ struct o2net_send_tracking;
 struct o2net_sock_container;
 
 #ifdef CONFIG_DEBUG_FS
-int o2net_debugfs_init(void);
+void o2net_debugfs_init(void);
 void o2net_debugfs_exit(void);
 void o2net_debug_add_nst(struct o2net_send_tracking *nst);
 void o2net_debug_del_nst(struct o2net_send_tracking *nst);
 void o2net_debug_add_sc(struct o2net_sock_container *sc);
 void o2net_debug_del_sc(struct o2net_sock_container *sc);
 #else
-static inline int o2net_debugfs_init(void)
+static inline void o2net_debugfs_init(void)
 {
-	return 0;
 }
 static inline void o2net_debugfs_exit(void)
 {

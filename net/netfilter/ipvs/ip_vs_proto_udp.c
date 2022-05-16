@@ -148,7 +148,7 @@ udp_snat_handler(struct sk_buff *skb, struct ip_vs_protocol *pp,
 	oldlen = skb->len - udphoff;
 
 	/* csum_check requires unshared skb */
-	if (!skb_make_writable(skb, udphoff+sizeof(*udph)))
+	if (skb_ensure_writable(skb, udphoff + sizeof(*udph)))
 		return 0;
 
 	if (unlikely(cp->app != NULL)) {
@@ -231,7 +231,7 @@ udp_dnat_handler(struct sk_buff *skb, struct ip_vs_protocol *pp,
 	oldlen = skb->len - udphoff;
 
 	/* csum_check requires unshared skb */
-	if (!skb_make_writable(skb, udphoff+sizeof(*udph)))
+	if (skb_ensure_writable(skb, udphoff + sizeof(*udph)))
 		return 0;
 
 	if (unlikely(cp->app != NULL)) {
@@ -318,7 +318,7 @@ udp_csum_check(int af, struct sk_buff *skb, struct ip_vs_protocol *pp)
 		case CHECKSUM_NONE:
 			skb->csum = skb_checksum(skb, udphoff,
 						 skb->len - udphoff, 0);
-			/* fall through */
+			fallthrough;
 		case CHECKSUM_COMPLETE:
 #ifdef CONFIG_IP_VS_IPV6
 			if (af == AF_INET6) {

@@ -46,7 +46,7 @@ read_bmof(struct file *filp, struct kobject *kobj,
 	return count;
 }
 
-static int wmi_bmof_probe(struct wmi_device *wdev)
+static int wmi_bmof_probe(struct wmi_device *wdev, const void *context)
 {
 	struct bmof_priv *priv;
 	int ret;
@@ -86,13 +86,12 @@ static int wmi_bmof_probe(struct wmi_device *wdev)
 	return ret;
 }
 
-static int wmi_bmof_remove(struct wmi_device *wdev)
+static void wmi_bmof_remove(struct wmi_device *wdev)
 {
 	struct bmof_priv *priv = dev_get_drvdata(&wdev->dev);
 
 	sysfs_remove_bin_file(&wdev->dev.kobj, &priv->bmof_bin_attr);
 	kfree(priv->bmofdata);
-	return 0;
 }
 
 static const struct wmi_device_id wmi_bmof_id_table[] = {

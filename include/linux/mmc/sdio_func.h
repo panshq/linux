@@ -25,7 +25,7 @@ struct sdio_func_tuple {
 	struct sdio_func_tuple *next;
 	unsigned char code;
 	unsigned char size;
-	unsigned char data[0];
+	unsigned char data[];
 };
 
 /*
@@ -51,6 +51,8 @@ struct sdio_func {
 
 	u8			*tmpbuf;	/* DMA:able scratch buffer */
 
+	u8			major_rev;	/* major revision number */
+	u8			minor_rev;	/* minor revision number */
 	unsigned		num_info;	/* number of info strings */
 	const char		**info;		/* info strings */
 
@@ -166,5 +168,11 @@ extern void sdio_f0_writeb(struct sdio_func *func, unsigned char b,
 
 extern mmc_pm_flag_t sdio_get_host_pm_caps(struct sdio_func *func);
 extern int sdio_set_host_pm_flags(struct sdio_func *func, mmc_pm_flag_t flags);
+
+extern void sdio_retune_crc_disable(struct sdio_func *func);
+extern void sdio_retune_crc_enable(struct sdio_func *func);
+
+extern void sdio_retune_hold_now(struct sdio_func *func);
+extern void sdio_retune_release(struct sdio_func *func);
 
 #endif /* LINUX_MMC_SDIO_FUNC_H */

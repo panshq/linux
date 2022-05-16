@@ -267,7 +267,7 @@ static struct spi_board_info bk3_spi_board_info[] __initdata = {
  * goes through CPLD
  */
 static struct gpiod_lookup_table bk3_spi_cs_gpio_table = {
-	.dev_id = "ep93xx-spi.0",
+	.dev_id = "spi0",
 	.table = {
 		GPIO_LOOKUP("F", 3, "cs", GPIO_ACTIVE_LOW),
 		{ },
@@ -316,7 +316,7 @@ static struct spi_board_info ts72xx_spi_devices[] __initdata = {
 };
 
 static struct gpiod_lookup_table ts72xx_spi_cs_gpio_table = {
-	.dev_id = "ep93xx-spi.0",
+	.dev_id = "spi0",
 	.table = {
 		/* DIO_17 */
 		GPIO_LOOKUP("F", 2, "cs", GPIO_ACTIVE_LOW),
@@ -354,7 +354,6 @@ MACHINE_START(TS72XX, "Technologic Systems TS-72xx SBC")
 	.init_irq	= ep93xx_init_irq,
 	.init_time	= ep93xx_timer_init,
 	.init_machine	= ts72xx_init_machine,
-	.init_late	= ep93xx_init_late,
 	.restart	= ep93xx_restart,
 MACHINE_END
 
@@ -418,6 +417,5 @@ MACHINE_START(BK3, "Liebherr controller BK3.1")
 	.init_irq	= ep93xx_init_irq,
 	.init_time	= ep93xx_timer_init,
 	.init_machine	= bk3_init_machine,
-	.init_late	= ep93xx_init_late,
 	.restart	= ep93xx_restart,
 MACHINE_END

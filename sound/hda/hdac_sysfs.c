@@ -66,7 +66,7 @@ static struct attribute *hdac_dev_attrs[] = {
 	NULL
 };
 
-static struct attribute_group hdac_dev_attr_group = {
+static const struct attribute_group hdac_dev_attr_group = {
 	.attrs	= hdac_dev_attrs,
 };
 
@@ -428,7 +428,7 @@ int hda_widget_sysfs_reinit(struct hdac_device *codec,
 	int i;
 
 	if (!codec->widgets)
-		return hda_widget_sysfs_init(codec);
+		return 0;
 
 	tree = kmemdup(codec->widgets, sizeof(*tree), GFP_KERNEL);
 	if (!tree)

@@ -124,7 +124,7 @@ il3945_clear_win(struct il3945_rate_scale_data *win)
 	win->stamp = 0;
 }
 
-/**
+/*
  * il3945_rate_scale_flush_wins - flush out the rate scale wins
  *
  * Returns the number of wins that have gathered data but were
@@ -229,7 +229,7 @@ il3945_bg_rate_scale_flush(struct timer_list *t)
 	D_RATE("leave\n");
 }
 
-/**
+/*
  * il3945_collect_tx_data - Update the success/failure sliding win
  *
  * We keep a sliding win of the last 64 packets transmitted
@@ -374,7 +374,7 @@ out:
 }
 
 static void *
-il3945_rs_alloc(struct ieee80211_hw *hw, struct dentry *debugfsdir)
+il3945_rs_alloc(struct ieee80211_hw *hw)
 {
 	return hw->priv;
 }
@@ -416,7 +416,7 @@ il3945_rs_free_sta(void *il_priv, struct ieee80211_sta *sta, void *il_sta)
 	del_timer_sync(&rs_sta->rate_scale_flush);
 }
 
-/**
+/*
  * il3945_rs_tx_status - Update rate control values based on Tx results
  *
  * NOTE: Uses il_priv->retry_rate for the # of retries attempted by
@@ -584,7 +584,7 @@ il3945_get_adjacent_rate(struct il3945_rs_sta *rs_sta, u8 idx, u16 rate_mask,
 	return (high << 8) | low;
 }
 
-/**
+/*
  * il3945_rs_get_rate - find the rate for the requested packet
  *
  * Returns the ieee80211_rate structure allocated by the driver.
@@ -630,9 +630,6 @@ il3945_rs_get_rate(void *il_r, struct ieee80211_sta *sta, void *il_sta,
 		D_RATE("Rate scaling information not initialized yet.\n");
 		il_sta = NULL;
 	}
-
-	if (rate_control_send_low(sta, il_sta, txrc))
-		return;
 
 	rate_mask = sta->supp_rates[sband->band];
 
@@ -846,17 +843,8 @@ il3945_add_debugfs(void *il, void *il_sta, struct dentry *dir)
 {
 	struct il3945_rs_sta *lq_sta = il_sta;
 
-	lq_sta->rs_sta_dbgfs_stats_table_file =
-	    debugfs_create_file("rate_stats_table", 0600, dir, lq_sta,
-				&rs_sta_dbgfs_stats_table_ops);
-
-}
-
-static void
-il3945_remove_debugfs(void *il, void *il_sta)
-{
-	struct il3945_rs_sta *lq_sta = il_sta;
-	debugfs_remove(lq_sta->rs_sta_dbgfs_stats_table_file);
+	debugfs_create_file("rate_stats_table", 0600, dir, lq_sta,
+			    &rs_sta_dbgfs_stats_table_ops);
 }
 #endif
 
@@ -883,7 +871,6 @@ static const struct rate_control_ops rs_ops = {
 	.free_sta = il3945_rs_free_sta,
 #ifdef CONFIG_MAC80211_DEBUGFS
 	.add_sta_debugfs = il3945_add_debugfs,
-	.remove_sta_debugfs = il3945_remove_debugfs,
 #endif
 
 };

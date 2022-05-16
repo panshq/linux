@@ -779,9 +779,6 @@ struct il_sensitivity_ranges {
 	u16 nrg_th_cca;
 };
 
-#define KELVIN_TO_CELSIUS(x) ((x)-273)
-#define CELSIUS_TO_KELVIN(x) ((x)+273)
-
 /**
  * struct il_hw_params
  * @bcast_id: f/w broadcast station ID
@@ -2807,10 +2804,6 @@ struct il_lq_sta {
 	struct il_traffic_load load[TID_MAX_LOAD_COUNT];
 	u8 tx_agg_tid_en;
 #ifdef CONFIG_MAC80211_DEBUGFS
-	struct dentry *rs_sta_dbgfs_scale_table_file;
-	struct dentry *rs_sta_dbgfs_stats_table_file;
-	struct dentry *rs_sta_dbgfs_rate_scale_data_file;
-	struct dentry *rs_sta_dbgfs_tx_agg_tid_en_file;
 	u32 dbg_fixed_rate;
 #endif
 	struct il_priv *drv;
@@ -2932,8 +2925,8 @@ do {									\
 #define IL_DBG(level, fmt, args...)					\
 do {									\
 	if (il_get_debug_level(il) & level)				\
-		dev_err(&il->hw->wiphy->dev, "%c %s " fmt,		\
-			in_interrupt() ? 'I' : 'U', __func__ , ##args); \
+		dev_err(&il->hw->wiphy->dev, "%s " fmt, __func__,	\
+			 ##args);					\
 } while (0)
 
 #define il_print_hex_dump(il, level, p, len)				\
@@ -2944,7 +2937,7 @@ do {									\
 } while (0)
 
 #else
-#define IL_DBG(level, fmt, args...)
+#define IL_DBG(level, fmt, args...) no_printk(fmt, ##args)
 static inline void
 il_print_hex_dump(struct il_priv *il, int level, const void *p, u32 len)
 {

@@ -8,8 +8,6 @@
 # Copyright (C) 1994 by Linus Torvalds
 #
 
-KBUILD_DEFCONFIG := defconfig
-
 NM := $(NM) -B
 
 LDFLAGS_vmlinux	:= -static -N #-relax
@@ -40,9 +38,6 @@ KBUILD_CFLAGS += $(cflags-y) -Wa,-mev6
 
 head-y := arch/alpha/kernel/head.o
 
-core-y				+= arch/alpha/kernel/ arch/alpha/mm/
-core-$(CONFIG_MATHEMU)		+= arch/alpha/math-emu/
-drivers-$(CONFIG_OPROFILE)	+= arch/alpha/oprofile/
 libs-y				+= arch/alpha/lib/
 
 # export what is needed by arch/alpha/boot/Makefile
@@ -59,9 +54,6 @@ $(boot)/vmlinux.gz: vmlinux
 
 bootimage bootpfile bootpzfile: vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
-
-archclean:
-	$(Q)$(MAKE) $(clean)=$(boot)
 
 archheaders:
 	$(Q)$(MAKE) $(build)=arch/alpha/kernel/syscalls all

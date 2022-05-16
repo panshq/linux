@@ -34,6 +34,9 @@ static DEFINE_SPINLOCK(lweventlist_lock);
 
 static unsigned char default_operstate(const struct net_device *dev)
 {
+	if (netif_testing(dev))
+		return IF_OPER_TESTING;
+
 	if (!netif_carrier_ok(dev))
 		return (dev->ifindex != dev_get_iflink(dev) ?
 			IF_OPER_LOWERLAYERDOWN : IF_OPER_DOWN);
@@ -52,14 +55,18 @@ static void rfc2863_policy(struct net_device *dev)
 	if (operstate == dev->operstate)
 		return;
 
-	write_lock_bh(&dev_base_lock);
+	write_lock(&dev_base_lock);
 
 	switch(dev->link_mode) {
+	case IF_LINK_MODE_TESTING:
+		if (operstate == IF_OPER_UP)
+			operstate = IF_OPER_TESTING;
+		break;
+
 	case IF_LINK_MODE_DORMANT:
 		if (operstate == IF_OPER_UP)
 			operstate = IF_OPER_DORMANT;
 		break;
-
 	case IF_LINK_MODE_DEFAULT:
 	default:
 		break;
@@ -67,14 +74,15 @@ static void rfc2863_policy(struct net_device *dev)
 
 	dev->operstate = operstate;
 
-	write_unlock_bh(&dev_base_lock);
+	write_unlock(&dev_base_lock);
 }
 
 
 void linkwatch_init_dev(struct net_device *dev)
 {
 	/* Handle pre-registration link state changes */
-	if (!netif_carrier_ok(dev) || netif_dormant(dev))
+	if (!netif_carrier_ok(dev) || netif_dormant(dev) ||
+	    netif_testing(dev))
 		rfc2863_policy(dev);
 }
 
@@ -101,7 +109,7 @@ static void linkwatch_add_event(struct net_device *dev)
 	spin_lock_irqsave(&lweventlist_lock, flags);
 	if (list_empty(&dev->link_watch_list)) {
 		list_add_tail(&dev->link_watch_list, &lweventlist);
-		dev_hold(dev);
+		dev_hold_track(dev, &dev->linkwatch_dev_tracker, GFP_ATOMIC);
 	}
 	spin_unlock_irqrestore(&lweventlist_lock, flags);
 }
@@ -150,7 +158,7 @@ static void linkwatch_do_dev(struct net_device *dev)
 	clear_bit(__LINK_STATE_LINKWATCH_PENDING, &dev->state);
 
 	rfc2863_policy(dev);
-	if (dev->flags & IFF_UP && netif_device_present(dev)) {
+	if (dev->flags & IFF_UP) {
 		if (netif_carrier_ok(dev))
 			dev_activate(dev);
 		else
@@ -158,13 +166,23 @@ static void linkwatch_do_dev(struct net_device *dev)
 
 		netdev_state_change(dev);
 	}
-	dev_put(dev);
+	/* Note: our callers are responsible for calling netdev_tracker_free().
+	 * This is the reason we use __dev_put() instead of dev_put().
+	 */
+	__dev_put(dev);
 }
 
 static void __linkwatch_run_queue(int urgent_only)
 {
+#define MAX_DO_DEV_PER_LOOP	100
+
+	int do_dev = MAX_DO_DEV_PER_LOOP;
 	struct net_device *dev;
 	LIST_HEAD(wrk);
+
+	/* Give urgent case more budget */
+	if (urgent_only)
+		do_dev += MAX_DO_DEV_PER_LOOP;
 
 	/*
 	 * Limit the number of linkwatch events to one
@@ -184,19 +202,28 @@ static void __linkwatch_run_queue(int urgent_only)
 	spin_lock_irq(&lweventlist_lock);
 	list_splice_init(&lweventlist, &wrk);
 
-	while (!list_empty(&wrk)) {
+	while (!list_empty(&wrk) && do_dev > 0) {
 
 		dev = list_first_entry(&wrk, struct net_device, link_watch_list);
 		list_del_init(&dev->link_watch_list);
 
-		if (urgent_only && !linkwatch_urgent_event(dev)) {
+		if (!netif_device_present(dev) ||
+		    (urgent_only && !linkwatch_urgent_event(dev))) {
 			list_add_tail(&dev->link_watch_list, &lweventlist);
 			continue;
 		}
+		/* We must free netdev tracker under
+		 * the spinlock protection.
+		 */
+		netdev_tracker_free(dev, &dev->linkwatch_dev_tracker);
 		spin_unlock_irq(&lweventlist_lock);
 		linkwatch_do_dev(dev);
+		do_dev--;
 		spin_lock_irq(&lweventlist_lock);
 	}
+
+	/* Add the remaining work back to lweventlist */
+	list_splice_init(&wrk, &lweventlist);
 
 	if (!list_empty(&lweventlist))
 		linkwatch_schedule_work(0);
@@ -212,6 +239,10 @@ void linkwatch_forget_dev(struct net_device *dev)
 	if (!list_empty(&dev->link_watch_list)) {
 		list_del_init(&dev->link_watch_list);
 		clean = 1;
+		/* We must release netdev tracker under
+		 * the spinlock protection.
+		 */
+		netdev_tracker_free(dev, &dev->linkwatch_dev_tracker);
 	}
 	spin_unlock_irqrestore(&lweventlist_lock, flags);
 	if (clean)

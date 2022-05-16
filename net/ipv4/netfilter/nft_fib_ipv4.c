@@ -1,8 +1,4 @@
-/*
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- */
+// SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -156,6 +152,7 @@ static const struct nft_expr_ops nft_fib4_type_ops = {
 	.init		= nft_fib_init,
 	.dump		= nft_fib_dump,
 	.validate	= nft_fib_validate,
+	.reduce		= nft_fib_reduce,
 };
 
 static const struct nft_expr_ops nft_fib4_ops = {
@@ -165,6 +162,7 @@ static const struct nft_expr_ops nft_fib4_ops = {
 	.init		= nft_fib_init,
 	.dump		= nft_fib_dump,
 	.validate	= nft_fib_validate,
+	.reduce		= nft_fib_reduce,
 };
 
 static const struct nft_expr_ops *
@@ -214,3 +212,4 @@ module_exit(nft_fib4_module_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Florian Westphal <fw@strlen.de>");
 MODULE_ALIAS_NFT_AF_EXPR(2, "fib");
+MODULE_DESCRIPTION("nftables fib / ip route lookup support");

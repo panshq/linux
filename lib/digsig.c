@@ -20,7 +20,7 @@
 #include <linux/key.h>
 #include <linux/crypto.h>
 #include <crypto/hash.h>
-#include <crypto/sha.h>
+#include <crypto/sha1.h>
 #include <keys/user-type.h>
 #include <linux/mpi.h>
 #include <linux/digsig.h>
@@ -218,7 +218,7 @@ int digsig_verify(struct key *keyring, const char *sig, int siglen,
 		/* search in specific keyring */
 		key_ref_t kref;
 		kref = keyring_search(make_key_ref(keyring, 1UL),
-						&key_type_user, name);
+				      &key_type_user, name, true);
 		if (IS_ERR(kref))
 			key = ERR_CAST(kref);
 		else
