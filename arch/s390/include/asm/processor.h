@@ -83,6 +83,7 @@ void cpu_detect_mhz_feature(void);
 extern const struct seq_operations cpuinfo_op;
 extern void execve_tail(void);
 extern void __bpon(void);
+unsigned long vdso_size(void);
 
 /*
  * User space process size: 2GB for 31 bit, 4TB or 8PT for 64 bit.
@@ -94,9 +95,10 @@ extern void __bpon(void);
 					(_REGION3_SIZE >> 1) : (_REGION2_SIZE >> 1))
 #define TASK_SIZE_MAX		(-PAGE_SIZE)
 
-#define STACK_TOP		(test_thread_flag(TIF_31BIT) ? \
-					_REGION3_SIZE : _REGION2_SIZE)
-#define STACK_TOP_MAX		_REGION2_SIZE
+#define VDSO_BASE		(STACK_TOP + PAGE_SIZE)
+#define VDSO_LIMIT		(test_thread_flag(TIF_31BIT) ? _REGION3_SIZE : _REGION2_SIZE)
+#define STACK_TOP		(VDSO_LIMIT - vdso_size() - PAGE_SIZE)
+#define STACK_TOP_MAX		(_REGION2_SIZE - vdso_size() - PAGE_SIZE)
 
 #define HAVE_ARCH_PICK_MMAP_LAYOUT
 
@@ -183,9 +185,6 @@ struct pt_regs;
 
 void show_registers(struct pt_regs *regs);
 void show_cacheinfo(struct seq_file *m);
-
-/* Free all resources held by a thread. */
-static inline void release_thread(struct task_struct *tsk) { }
 
 /* Free guarded storage control block */
 void guarded_storage_release(struct task_struct *tsk);
@@ -302,30 +301,7 @@ static __always_inline void __noreturn disabled_wait(void)
 	while (1);
 }
 
-/*
- * Basic Program Check Handler.
- */
-extern void s390_base_pgm_handler(void);
-extern void (*s390_base_pgm_handler_fn)(struct pt_regs *regs);
-
 #define ARCH_LOW_ADDRESS_LIMIT	0x7fffffffUL
-
-extern int memcpy_real(void *, unsigned long, size_t);
-extern void memcpy_absolute(void *, void *, size_t);
-
-#define put_abs_lowcore(member, x) do {					\
-	unsigned long __abs_address = offsetof(struct lowcore, member);	\
-	__typeof__(((struct lowcore *)0)->member) __tmp = (x);		\
-									\
-	memcpy_absolute(__va(__abs_address), &__tmp, sizeof(__tmp));	\
-} while (0)
-
-#define get_abs_lowcore(x, member) do {					\
-	unsigned long __abs_address = offsetof(struct lowcore, member);	\
-	__typeof__(((struct lowcore *)0)->member) *__ptr = &(x);	\
-									\
-	memcpy_absolute(__ptr, __va(__abs_address), sizeof(*__ptr));	\
-} while (0)
 
 extern int s390_isolate_bp(void);
 extern int s390_isolate_bp_guest(void);
